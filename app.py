@@ -112,6 +112,7 @@ class MyBot(discord.Client):
         """
         ignore custom emojis, standard emojis, and URLs when checking for keyword presence
         """
+        string = string.lower()
         string = re.sub(r"<:\w+:\d+>", "", string)
         string = re.sub(r":\w+:", "", string)
         string = re.sub(r"https?://\S+", "", string)
