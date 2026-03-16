@@ -215,7 +215,7 @@ class MyBot(discord.Client):
         except discord.Forbidden:
             await interaction.response.send_message(
                 "❌ 無法發送 DM 訊息！\n請檢查以下設定：\n"
-                "1. 確認你的 DM 是開放的（設定 > 隱私安全 > 允許來自伺服器成員的 DM）\n"
+                "1. 確認你的 DM 是開放的（設定 > 內容與社交 > 社交權限 > 私人訊息）\n"
                 "2. 檢查是否有封鎖 Bot\n\n"
                 "請先完成上述設定後再試一次。",
                 ephemeral=True,
