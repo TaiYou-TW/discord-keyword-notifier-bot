@@ -1,4 +1,3 @@
-from email.mime import message
 import logging
 import os
 
@@ -131,32 +130,31 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     logger.info("User %s set cooldown to %d seconds", interaction.user, seconds)
 
 
-@bot.tree.command(name="notify_add", description="訂閱關鍵字通知")
+@bot.tree.command(name="notify_add", description="訂閱關鍵字通知（用 , 分隔可新增多個關鍵字）")
 async def notify_add(interaction: discord.Interaction, keyword: str):
-    kw = keyword.lower().strip()
+    keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
 
     conn = sqlite3.connect(bot.db_path)
 
-    res = conn.execute(
-        "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
-    ).fetchone()
-    if res is not None:
-        await interaction.response.send_message(
-            f"⚠️ 你已經訂閱過 `{kw}` 了！", ephemeral=True
-        )
-        conn.close()
-        return
+    for kw in keywords:
+        res = conn.execute(
+            "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
+        ).fetchone()
+        if res is not None:
+            continue
 
-    conn.execute("INSERT INTO user_keywords VALUES (?, ?)", (uid, kw))
+        conn.execute("INSERT INTO user_keywords VALUES (?, ?)", (uid, kw))
+
     conn.commit()
     conn.close()
 
     if uid not in bot.keyword_cache:
         bot.keyword_cache[uid] = []
-    if kw not in bot.keyword_cache[uid]:
-        bot.keyword_cache[uid].append(kw)
-    await interaction.response.send_message(f"✅ 已訂閱：`{kw}`", ephemeral=True)
+    for kw in keywords:
+        if kw not in bot.keyword_cache[uid]:
+            bot.keyword_cache[uid].append(kw)
+    await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
 
     logger.info("User %s is subscribing to keyword: %s", interaction.user, kw)
 
@@ -179,32 +177,30 @@ async def notify_list(interaction: discord.Interaction):
     logger.info("User %s requested their keyword list", interaction.user)
 
 
-@bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知")
+@bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知（用 , 分隔可取消多個關鍵字）")
 async def notify_remove(interaction: discord.Interaction, keyword: str):
-    kw = keyword.lower().strip()
+    keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
 
     conn = sqlite3.connect(bot.db_path)
-    res = conn.execute(
-        "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
-    ).fetchone()
-    if res is None:
-        await interaction.response.send_message(
-            f"⚠️ 你沒有訂閱 `{kw}`！", ephemeral=True
-        )
-        conn.close()
-        return
+    for kw in keywords:
+        res = conn.execute(
+            "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
+        ).fetchone()
 
-    conn.execute(
-        "DELETE FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
-    )
+        if res is None:
+            continue
+
+        conn.execute(
+            "DELETE FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
+        )
     conn.commit()
     conn.close()
 
     if uid in bot.keyword_cache and kw in bot.keyword_cache[uid]:
         bot.keyword_cache[uid].remove(kw)
 
-    await interaction.response.send_message(f"✅ 已取消訂閱：`{kw}`", ephemeral=True)
+    await interaction.response.send_message(f"✅ 已取消訂閱：`{keyword}`", ephemeral=True)
 
     logger.info("User %s is unsubscribing from keyword: %s", interaction.user, kw)
 
