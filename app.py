@@ -102,13 +102,18 @@ class MyBot(discord.Client):
         try:
             await target_user.send(embed=embed)
         except discord.Forbidden:
-            logger.warning("Failed to send notification to %s: Forbidden", target_user)
+            logger.warning(
+                "Failed to send notification to %s(%d): Forbidden", target_user, uid
+            )
         except Exception as e:
-            logger.exception("Error sending notification to %s: %s", target_user, e)
+            logger.exception(
+                "Error sending notification to %s(%d): %s", target_user, uid, e
+            )
 
         logger.info(
-            "Sending notification to %s for keyword '%s' in message: %s",
+            "Sending notification to %s(%d) for keyword '%s' in message: %s",
             target_user,
+            uid,
             kw,
             message.content,
         )
@@ -221,8 +226,9 @@ class MyBot(discord.Client):
                 ephemeral=True,
             )
             logger.warning(
-                "Failed to send test message to user %s: Permission denied",
+                "Failed to send test message to user %s(%d): Permission denied",
                 interaction.user,
+                interaction.user.id,
             )
             return False
         except Exception as e:
@@ -230,7 +236,10 @@ class MyBot(discord.Client):
                 f"⚠️ 發送測試訊息時出錯：{str(e)}", ephemeral=True
             )
             logger.exception(
-                "Error sending test message to user %s: %s", interaction.user, e
+                "Error sending test message to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
             )
             return False
         return True
@@ -264,7 +273,9 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
         f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
     )
 
-    logger.info("User %s set cooldown to %d seconds", interaction.user, seconds)
+    logger.info(
+        "User %s(%d) set cooldown to %d seconds", interaction.user, uid, seconds
+    )
 
 
 @bot.tree.command(name="notify_add", description="訂閱關鍵字通知")
@@ -277,7 +288,9 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
     # Send test message only if permissions haven't been verified yet
     if not permission_verified:
         if not await bot.can_send_permission_test_message(interaction):
-            logger.warning("User %s failed permission verification", interaction.user)
+            logger.warning(
+                "User %s(%d) failed permission verification", interaction.user, uid
+            )
             return
 
         # Mark permission as verified only after successful test message
@@ -314,7 +327,9 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
             bot.keyword_cache[uid].append(kw)
     await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
 
-    logger.info("User %s is subscribing to keyword: %s", interaction.user, keyword)
+    logger.info(
+        "User %s(%d) is subscribing to keyword: %s", interaction.user, uid, keyword
+    )
 
 
 @bot.tree.command(name="notify_list", description="查看所有訂閱關鍵字")
@@ -332,7 +347,11 @@ async def notify_list(interaction: discord.Interaction):
     )
     await interaction.response.send_message(msg, ephemeral=True)
 
-    logger.info("User %s requested their keyword list", interaction.user)
+    logger.info(
+        "User %s(%d) requested their keyword list",
+        interaction.user,
+        interaction.user.id,
+    )
 
 
 @bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知")
@@ -363,7 +382,9 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
         f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
     )
 
-    logger.info("User %s is unsubscribing from keyword: %s", interaction.user, keyword)
+    logger.info(
+        "User %s(%d) is unsubscribing from keyword: %s", interaction.user, uid, keyword
+    )
 
 
 @bot.event
