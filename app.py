@@ -106,9 +106,28 @@ class MyBot(discord.Client):
         self.last_notified[(uid, kw)] = time.time()
 
     def is_trigger_keyword(self, message, kw):
+        result = False
+
         # ignore emojis, like: <:emoji_name:emoji_id>
         content = re.sub(r'<:\w+:\d+>', '', message.content)
-        return kw in content
+
+        # check content first
+        if kw in content:
+            result = True
+
+        # then check embeds
+        for embed in message.embeds:
+            if embed.description and kw in embed.description:
+                result = True
+                break
+            for field in embed.fields:
+                if kw in field.value:
+                    result = True
+                    break
+            if result:
+                break
+
+        return result
 
 
 bot = MyBot()
