@@ -74,8 +74,9 @@ class MyBot(discord.Client):
             "CREATE TABLE IF NOT EXISTS user_keywords (user_id INTEGER, keyword TEXT)"
         )
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, seconds INTEGER)"
+            "CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, seconds INTEGER, permission_verified INTEGER DEFAULT 0)"
         )
+
         conn.commit()
         conn.close()
 
@@ -98,7 +99,12 @@ class MyBot(discord.Client):
         embed.add_field(name="來源", value=f"{message.channel.mention}")
         embed.add_field(name="連結", value=f"[點我跳轉]({message.jump_url})")
 
-        await target_user.send(embed=embed)
+        try:
+            await target_user.send(embed=embed)
+        except discord.Forbidden:
+            logger.warning("Failed to send notification to %s: Forbidden", target_user)
+        except Exception as e:
+            logger.exception("Error sending notification to %s: %s", target_user, e)
 
         logger.info(
             "Sending notification to %s for keyword '%s' in message: %s",
@@ -189,6 +195,46 @@ class MyBot(discord.Client):
         members = self.guild_member_ids.get(guild_id)
         return uid in members if members is not None else False
 
+    def has_permission_verified(self, uid):
+        # Check if user has already verified permissions
+        conn = sqlite3.connect(self.db_path)
+        result = conn.execute(
+            "SELECT permission_verified FROM user_settings WHERE user_id = ?", (uid,)
+        ).fetchone()
+        conn.close()
+        return result[0] if result else 0
+
+    async def can_send_permission_test_message(self, interaction: discord.Interaction):
+        try:
+            embed = discord.Embed(
+                title="✅ 權限測試",
+                description="恭喜！Bot 成功發送訊息到你的 DM。你已經可以接收關鍵字通知了。",
+                color=0x2ECC71,
+            )
+            await interaction.user.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ 無法發送 DM 訊息！\n請檢查以下設定：\n"
+                "1. 確認你的 DM 是開放的（設定 > 隱私安全 > 允許來自伺服器成員的 DM）\n"
+                "2. 檢查是否有封鎖 Bot\n\n"
+                "請先完成上述設定後再試一次。",
+                ephemeral=True,
+            )
+            logger.warning(
+                "Failed to send test message to user %s: Permission denied",
+                interaction.user,
+            )
+            return False
+        except Exception as e:
+            await interaction.response.send_message(
+                f"⚠️ 發送測試訊息時出錯：{str(e)}", ephemeral=True
+            )
+            logger.exception(
+                "Error sending test message to user %s: %s", interaction.user, e
+            )
+            return False
+        return True
+
 
 bot = MyBot()
 
@@ -219,6 +265,22 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
 async def notify_add(interaction: discord.Interaction, keyword: str):
     keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
+    permission_verified = bot.has_permission_verified(uid)
+
+    # Send test message only if permissions haven't been verified yet
+    if not permission_verified:
+        if not await bot.can_send_permission_test_message(interaction):
+            logger.warning("User %s failed permission verification", interaction.user)
+            return
+
+        # Mark permission as verified only after successful test message
+        conn = sqlite3.connect(bot.db_path)
+        conn.execute(
+            "INSERT OR REPLACE INTO user_settings (user_id, permission_verified) VALUES (?, ?)",
+            (uid, 1),
+        )
+        conn.commit()
+        conn.close()
 
     conn = sqlite3.connect(bot.db_path)
 
