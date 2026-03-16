@@ -3,6 +3,4 @@ services:
     build: .
     env_file:
       - .env
-    volumes:
-      - ./keywords.db:/app/keywords.db
     restart: unless-stopped
