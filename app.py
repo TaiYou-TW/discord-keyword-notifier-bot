@@ -40,7 +40,7 @@ class MyBot(discord.Client):
         self.last_notified = {}  # { (user_id, kw): timestamp }
 
     def load_data(self):
-        logger.info("[*] Loading data from database...")
+        logger.info("Loading data from database...")
 
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -60,10 +60,10 @@ class MyBot(discord.Client):
 
         conn.close()
 
-        logger.info("[*] Data loaded successfully.")
+        logger.info("Data loaded successfully.")
 
     async def setup_hook(self):
-        logger.info("[*] Setting up database...")
+        logger.info("Setting up database...")
 
         conn = sqlite3.connect(self.db_path)
         conn.execute(
@@ -75,7 +75,7 @@ class MyBot(discord.Client):
         conn.commit()
         conn.close()
 
-        logger.info("[*] Database setup complete.")
+        logger.info("Database setup complete.")
 
         self.load_data()
         await self.tree.sync()
