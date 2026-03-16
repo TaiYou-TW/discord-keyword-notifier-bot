@@ -156,7 +156,7 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
             bot.keyword_cache[uid].append(kw)
     await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
 
-    logger.info("User %s is subscribing to keyword: %s", interaction.user, kw)
+    logger.info("User %s is subscribing to keyword: %s", interaction.user, keyword)
 
 
 @bot.tree.command(name="notify_list", description="查看我訂閱的所有關鍵字")
@@ -202,7 +202,7 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
 
     await interaction.response.send_message(f"✅ 已取消訂閱：`{keyword}`", ephemeral=True)
 
-    logger.info("User %s is unsubscribing from keyword: %s", interaction.user, kw)
+    logger.info("User %s is unsubscribing from keyword: %s", interaction.user, keyword)
 
 
 @bot.event
