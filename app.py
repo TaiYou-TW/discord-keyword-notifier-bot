@@ -1,3 +1,4 @@
+from email.mime import message
 import logging
 import os
 
@@ -44,11 +45,14 @@ class MyBot(discord.Client):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("SELECT user_id, keyword FROM user_keywords")
-        for uid, kw in c.fetchall():
+        res = c.execute("SELECT user_id, keyword FROM user_keywords")
+        all_keywords = res.fetchall()
+        for uid, kw in all_keywords:
             if uid not in self.keyword_cache:
                 self.keyword_cache[uid] = []
             self.keyword_cache[uid].append(kw)
+
+        logger.info(f"Loaded {len(all_keywords)} keywords for {len(self.keyword_cache)} users.")
 
         c.execute("SELECT user_id, seconds FROM user_settings")
         for uid, sec in c.fetchall():
@@ -84,6 +88,7 @@ class MyBot(discord.Client):
 
     async def send_notification(self, uid, message, kw):
         target_user = await self.fetch_user(uid)
+
         embed = discord.Embed(title=f"🔔 關鍵字 `{kw}` 命中", color=0x3498DB)
         embed.description = f"**內容：** {message.content[:200]}"
         embed.add_field(
@@ -92,6 +97,10 @@ class MyBot(discord.Client):
         embed.add_field(name="連結", value=f"[點我跳轉]({message.jump_url})")
 
         await target_user.send(embed=embed)
+
+        logger.info(
+            "Sending notification to %s for keyword '%s' in message: %s", target_user, kw, message.content
+        )
 
     def update_last_notified(self, uid, kw):
         self.last_notified[(uid, kw)] = time.time()
@@ -118,6 +127,8 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     await interaction.response.send_message(
         f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
     )
+    
+    logger.info("User %s set cooldown to %d seconds", interaction.user, seconds)
 
 
 @bot.tree.command(name="notify_add", description="訂閱關鍵字通知")
@@ -147,6 +158,8 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
         bot.keyword_cache[uid].append(kw)
     await interaction.response.send_message(f"✅ 已訂閱：`{kw}`", ephemeral=True)
 
+    logger.info("User %s is subscribing to keyword: %s", interaction.user, kw)
+
 
 @bot.tree.command(name="notify_list", description="查看我訂閱的所有關鍵字")
 async def notify_list(interaction: discord.Interaction):
@@ -162,6 +175,8 @@ async def notify_list(interaction: discord.Interaction):
         else "你還沒有訂閱任何關鍵字。"
     )
     await interaction.response.send_message(msg, ephemeral=True)
+
+    logger.info("User %s requested their keyword list", interaction.user)
 
 
 @bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知")
@@ -191,6 +206,8 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
 
     await interaction.response.send_message(f"✅ 已取消訂閱：`{kw}`", ephemeral=True)
 
+    logger.info("User %s is unsubscribing from keyword: %s", interaction.user, kw)
+
 
 @bot.event
 async def on_ready():
@@ -218,7 +235,7 @@ async def on_message(message):
                     bot.update_last_notified(uid, kw)
                     break
                 except Exception as e:
-                    logger.exception("無法通知用戶 %s：%s", uid, e)
+                    logger.exception("Exception occurred while notifying user %s: %s", uid, e)
 
 
 bot.run(TOKEN)
