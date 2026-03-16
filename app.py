@@ -115,8 +115,9 @@ bot = MyBot()
 
 
 @bot.tree.command(
-    name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間(秒)"
+    name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間"
 )
+@app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     if seconds < 0:
         await interaction.response.send_message("秒數不能為負數！", ephemeral=True)
@@ -136,7 +137,8 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     logger.info("User %s set cooldown to %d seconds", interaction.user, seconds)
 
 
-@bot.tree.command(name="notify_add", description="訂閱關鍵字通知（用 , 分隔可新增多個關鍵字）")
+@bot.tree.command(name="notify_add", description="訂閱關鍵字通知")
+@app_commands.describe(keyword="要訂閱的關鍵字（用 , 分隔）")
 async def notify_add(interaction: discord.Interaction, keyword: str):
     keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
@@ -165,7 +167,7 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
     logger.info("User %s is subscribing to keyword: %s", interaction.user, keyword)
 
 
-@bot.tree.command(name="notify_list", description="查看我訂閱的所有關鍵字")
+@bot.tree.command(name="notify_list", description="查看所有訂閱關鍵字")
 async def notify_list(interaction: discord.Interaction):
     conn = sqlite3.connect(bot.db_path)
     res = conn.execute(
@@ -183,7 +185,8 @@ async def notify_list(interaction: discord.Interaction):
     logger.info("User %s requested their keyword list", interaction.user)
 
 
-@bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知（用 , 分隔可取消多個關鍵字）")
+@bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知")
+@app_commands.describe(keyword="要取消訂閱的關鍵字（用 , 分隔）")
 async def notify_remove(interaction: discord.Interaction, keyword: str):
     keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
