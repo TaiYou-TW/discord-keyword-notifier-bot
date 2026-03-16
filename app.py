@@ -116,6 +116,7 @@ class MyBot(discord.Client):
         """
         string = string.lower()
         string = re.sub(r"<:\w+:\d+>", "", string)
+        string = re.sub(r"<@\d+>", "", string)
         string = re.sub(r":\w+:", "", string)
         string = re.sub(r"https?://\S+", "", string)
 
