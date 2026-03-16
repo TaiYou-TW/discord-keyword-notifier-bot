@@ -25,6 +25,7 @@ if not TOKEN:
 
 DB_PATH = os.getenv("DB_PATH", "keywords.db")
 DEFAULT_COOLDOWN = int(os.getenv("DEFAULT_COOLDOWN", "30"))
+MEMBER_CHECK_TTL = int(os.getenv("MEMBER_CHECK_TTL", "300"))
 
 
 class MyBot(discord.Client):
@@ -38,6 +39,8 @@ class MyBot(discord.Client):
         self.keyword_cache = {}  # { user_id: [kw1, kw2] }
         self.cooldown_settings = {}  # { user_id: seconds }
         self.last_notified = {}  # { (user_id, kw): timestamp }
+        self.guild_member_cache = {}  # { (guild_id, user_id): (is_member, checked_at) }
+        self.member_check_ttl = MEMBER_CHECK_TTL
 
     def load_data(self):
         logger.info("Loading data from database...")
@@ -144,6 +147,29 @@ class MyBot(discord.Client):
                 break
 
         return result
+
+    async def is_user_in_same_guild(self, uid, message):
+        if message.guild is None:
+            return False
+
+        cache_key = (message.guild.id, uid)
+        cached = self.guild_member_cache.get(cache_key)
+        if cached is not None:
+            is_member, checked_at = cached
+            if time.time() - checked_at < self.member_check_ttl:
+                return is_member
+
+        if message.guild.get_member(uid) is not None:
+            self.guild_member_cache[cache_key] = (True, time.time())
+            return True
+
+        try:
+            await message.guild.fetch_member(uid)
+            self.guild_member_cache[cache_key] = (True, time.time())
+            return True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            self.guild_member_cache[cache_key] = (False, time.time())
+            return False
 
 
 bot = MyBot()
@@ -260,7 +286,10 @@ async def on_message(message):
         return
 
     for uid, keywords in bot.keyword_cache.items():
-        if message.author.id == uid:
+        if message.author.id == uid or message.author.bot:
+            continue
+
+        if not await bot.is_user_in_same_guild(uid, message):
             continue
 
         for kw in keywords:
