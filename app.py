@@ -25,13 +25,13 @@ if not TOKEN:
 
 DB_PATH = os.getenv("DB_PATH", "keywords.db")
 DEFAULT_COOLDOWN = int(os.getenv("DEFAULT_COOLDOWN", "30"))
-MEMBER_CHECK_TTL = int(os.getenv("MEMBER_CHECK_TTL", "300"))
 
 
 class MyBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.db_path = DB_PATH
@@ -39,8 +39,7 @@ class MyBot(discord.Client):
         self.keyword_cache = {}  # { user_id: [kw1, kw2] }
         self.cooldown_settings = {}  # { user_id: seconds }
         self.last_notified = {}  # { (user_id, kw): timestamp }
-        self.guild_member_cache = {}  # { (guild_id, user_id): (is_member, checked_at) }
-        self.member_check_ttl = MEMBER_CHECK_TTL
+        self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
     def load_data(self):
         logger.info("Loading data from database...")
@@ -148,28 +147,46 @@ class MyBot(discord.Client):
 
         return result
 
+    async def cache_guild_members(self, guild):
+        if not self.intents.members:
+            logger.warning(
+                "Members intent is disabled; cannot warm member cache for guild %s",
+                guild.id,
+            )
+            return
+
+        try:
+            if not guild.chunked:
+                await guild.chunk(cache=True)
+
+            self.guild_member_ids[guild.id] = {member.id for member in guild.members}
+            logger.info(
+                "Cached %d members for guild %s",
+                len(self.guild_member_ids[guild.id]),
+                guild.id,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("Failed to cache members for guild %s", guild.id)
+
+    async def warm_member_cache(self):
+        for guild in self.guilds:
+            await self.cache_guild_members(guild)
+
     async def is_user_in_same_guild(self, uid, message):
         if message.guild is None:
             return False
 
-        cache_key = (message.guild.id, uid)
-        cached = self.guild_member_cache.get(cache_key)
-        if cached is not None:
-            is_member, checked_at = cached
-            if time.time() - checked_at < self.member_check_ttl:
-                return is_member
+        guild_id = message.guild.id
+        members = self.guild_member_ids.get(guild_id)
+        if members is not None:
+            return uid in members
 
         if message.guild.get_member(uid) is not None:
-            self.guild_member_cache[cache_key] = (True, time.time())
             return True
 
-        try:
-            await message.guild.fetch_member(uid)
-            self.guild_member_cache[cache_key] = (True, time.time())
-            return True
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            self.guild_member_cache[cache_key] = (False, time.time())
-            return False
+        await self.cache_guild_members(message.guild)
+        members = self.guild_member_ids.get(guild_id)
+        return uid in members if members is not None else False
 
 
 bot = MyBot()
@@ -278,6 +295,31 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
 @bot.event
 async def on_ready():
     logger.info("We have logged in as %s", bot.user)
+    await bot.warm_member_cache()
+
+
+@bot.event
+async def on_guild_join(guild):
+    await bot.cache_guild_members(guild)
+
+
+@bot.event
+async def on_guild_remove(guild):
+    bot.guild_member_ids.pop(guild.id, None)
+
+
+@bot.event
+async def on_member_join(member):
+    if member.guild.id not in bot.guild_member_ids:
+        bot.guild_member_ids[member.guild.id] = set()
+    bot.guild_member_ids[member.guild.id].add(member.id)
+
+
+@bot.event
+async def on_member_remove(member):
+    members = bot.guild_member_ids.get(member.guild.id)
+    if members is not None:
+        members.discard(member.id)
 
 
 @bot.event
