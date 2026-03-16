@@ -117,6 +117,9 @@ class MyBot(discord.Client):
 
         # then check embeds
         for embed in message.embeds:
+            if embed.title and kw in embed.title:
+                result = True
+                break
             if embed.description and kw in embed.description:
                 result = True
                 break
