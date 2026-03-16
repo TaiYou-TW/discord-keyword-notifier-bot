@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from dotenv import load_dotenv
 import discord
@@ -91,7 +92,7 @@ class MyBot(discord.Client):
         embed = discord.Embed(title=f"🔔 關鍵字 `{kw}` 命中", color=0x3498DB)
         embed.description = f"**內容：** {message.content[:200]}"
         embed.add_field(
-            name="來源", value=f"{message.channel.mention} | {message.guild.name}"
+            name="來源", value=f"{message.channel.mention}"
         )
         embed.add_field(name="連結", value=f"[點我跳轉]({message.jump_url})")
 
@@ -103,6 +104,11 @@ class MyBot(discord.Client):
 
     def update_last_notified(self, uid, kw):
         self.last_notified[(uid, kw)] = time.time()
+
+    def is_trigger_keyword(self, message, kw):
+        # ignore emojis, like: <:emoji_name:emoji_id>
+        content = re.sub(r'<:\w+:\d+>', '', message.content)
+        return kw in content
 
 
 bot = MyBot()
@@ -215,14 +221,12 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    content = message.content.lower()
-
     for uid, keywords in bot.keyword_cache.items():
         if message.author.id == uid:
             continue
 
         for kw in keywords:
-            if kw in content:
+            if bot.is_trigger_keyword(message, kw):
                 if bot.is_user_still_cooldown(uid, kw):
                     continue
 
