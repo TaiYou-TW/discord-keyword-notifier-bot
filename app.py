@@ -248,7 +248,14 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
 
     uid = interaction.user.id
     conn = sqlite3.connect(bot.db_path)
-    conn.execute("INSERT OR REPLACE INTO user_settings VALUES (?, ?)", (uid, seconds))
+    conn.execute(
+        """
+        INSERT INTO user_settings (user_id, seconds)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET seconds = excluded.seconds
+        """,
+        (uid, seconds),
+    )
     conn.commit()
     conn.close()
 
@@ -276,7 +283,11 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
         # Mark permission as verified only after successful test message
         conn = sqlite3.connect(bot.db_path)
         conn.execute(
-            "INSERT OR REPLACE INTO user_settings (user_id, permission_verified) VALUES (?, ?)",
+            """
+            INSERT INTO user_settings (user_id, permission_verified)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET permission_verified = excluded.permission_verified
+            """,
             (uid, 1),
         )
         conn.commit()
