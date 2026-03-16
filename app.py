@@ -52,7 +52,9 @@ class MyBot(discord.Client):
                 self.keyword_cache[uid] = []
             self.keyword_cache[uid].append(kw)
 
-        logger.info(f"Loaded {len(all_keywords)} keywords for {len(self.keyword_cache)} users.")
+        logger.info(
+            f"Loaded {len(all_keywords)} keywords for {len(self.keyword_cache)} users."
+        )
 
         c.execute("SELECT user_id, seconds FROM user_settings")
         for uid, sec in c.fetchall():
@@ -91,40 +93,50 @@ class MyBot(discord.Client):
 
         embed = discord.Embed(title=f"🔔 關鍵字 `{kw}` 命中", color=0x3498DB)
         embed.description = f"**內容：** {message.content[:200]}"
-        embed.add_field(
-            name="來源", value=f"{message.channel.mention}"
-        )
+        embed.add_field(name="來源", value=f"{message.channel.mention}")
         embed.add_field(name="連結", value=f"[點我跳轉]({message.jump_url})")
 
         await target_user.send(embed=embed)
 
         logger.info(
-            "Sending notification to %s for keyword '%s' in message: %s", target_user, kw, message.content
+            "Sending notification to %s for keyword '%s' in message: %s",
+            target_user,
+            kw,
+            message.content,
         )
 
     def update_last_notified(self, uid, kw):
         self.last_notified[(uid, kw)] = time.time()
 
+    def is_keyword_in_string(self, string, kw):
+        """
+        ignore custom emojis, standard emojis, and URLs when checking for keyword presence
+        """
+        string = re.sub(r"<:\w+:\d+>", "", string)
+        string = re.sub(r":\w+:", "", string)
+        string = re.sub(r"https?://\S+", "", string)
+
+        return kw in string
+
     def is_trigger_keyword(self, message, kw):
         result = False
 
-        # ignore emojis, like: <:emoji_name:emoji_id>
-        content = re.sub(r'<:\w+:\d+>', '', message.content)
-
         # check content first
-        if kw in content:
+        if self.is_keyword_in_string(message.content, kw):
             result = True
 
         # then check embeds
         for embed in message.embeds:
-            if embed.title and kw in embed.title:
+            if embed.title and self.is_keyword_in_string(embed.title, kw):
                 result = True
                 break
-            if embed.description and kw in embed.description:
+            if embed.description and self.is_keyword_in_string(embed.description, kw):
                 result = True
                 break
             for field in embed.fields:
-                if kw in field.value:
+                if self.is_keyword_in_string(
+                    field.name, kw
+                ) or self.is_keyword_in_string(field.value, kw):
                     result = True
                     break
             if result:
@@ -136,9 +148,7 @@ class MyBot(discord.Client):
 bot = MyBot()
 
 
-@bot.tree.command(
-    name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間"
-)
+@bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
 @app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     if seconds < 0:
@@ -155,7 +165,7 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     await interaction.response.send_message(
         f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
     )
-    
+
     logger.info("User %s set cooldown to %d seconds", interaction.user, seconds)
 
 
@@ -231,7 +241,9 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
     if uid in bot.keyword_cache and kw in bot.keyword_cache[uid]:
         bot.keyword_cache[uid].remove(kw)
 
-    await interaction.response.send_message(f"✅ 已取消訂閱：`{keyword}`", ephemeral=True)
+    await interaction.response.send_message(
+        f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
+    )
 
     logger.info("User %s is unsubscribing from keyword: %s", interaction.user, keyword)
 
@@ -260,7 +272,9 @@ async def on_message(message):
                     bot.update_last_notified(uid, kw)
                     break
                 except Exception as e:
-                    logger.exception("Exception occurred while notifying user %s: %s", uid, e)
+                    logger.exception(
+                        "Exception occurred while notifying user %s: %s", uid, e
+                    )
 
 
 bot.run(TOKEN)
