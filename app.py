@@ -218,29 +218,45 @@ class MyBot(discord.Client):
             )
             await interaction.user.send(embed=embed)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ 無法發送 DM 訊息！\n請檢查以下設定：\n"
-                "1. 確認你的 DM 是開放的（設定 > 內容與社交 > 社交權限 > 私人訊息）\n"
-                "2. 檢查是否有封鎖 Bot\n\n"
-                "請先完成上述設定後再試一次。",
-                ephemeral=True,
-            )
-            logger.warning(
-                "Failed to send test message to user %s(%d): Permission denied",
-                interaction.user,
-                interaction.user.id,
-            )
+            try:
+                await interaction.response.send_message(
+                    "❌ 無法發送 DM 訊息！\n請檢查以下設定：\n"
+                    "1. 確認你的 DM 是開放的（設定 > 內容與社交 > 社交權限 > 私人訊息）\n"
+                    "2. 檢查是否有封鎖 Bot\n\n"
+                    "請先完成上述設定後再試一次。",
+                    ephemeral=True,
+                )
+                logger.warning(
+                    "Failed to send test message to user %s(%d): Permission denied",
+                    interaction.user,
+                    interaction.user.id,
+                )
+            except Exception as e:
+                logger.exception(
+                    "Error sending DM permission warning to user %s(%d): %s",
+                    interaction.user,
+                    interaction.user.id,
+                    e,
+                )
             return False
         except Exception as e:
-            await interaction.response.send_message(
-                f"⚠️ 發送測試訊息時出錯：{str(e)}", ephemeral=True
-            )
-            logger.exception(
-                "Error sending test message to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
+            try:
+                await interaction.response.send_message(
+                    f"⚠️ 發送測試訊息時出錯：{str(e)}", ephemeral=True
+                )
+                logger.exception(
+                    "Error sending test message to user %s(%d): %s",
+                    interaction.user,
+                    interaction.user.id,
+                    e,
+                )
+            except Exception as e2:
+                logger.exception(
+                    "Error sending error message to user %s(%d): %s",
+                    interaction.user,
+                    interaction.user.id,
+                    e2,
+                )
             return False
         return True
 
@@ -252,7 +268,15 @@ bot = MyBot()
 @app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     if seconds < 0:
-        await interaction.response.send_message("秒數不能為負數！", ephemeral=True)
+        try:
+            await interaction.response.send_message("秒數不能為負數！", ephemeral=True)
+        except Exception as e:
+            logger.exception(
+                "Error sending cooldown error message to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
         return
 
     uid = interaction.user.id
@@ -269,9 +293,18 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     conn.close()
 
     bot.cooldown_settings[uid] = seconds
-    await interaction.response.send_message(
-        f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
-    )
+
+    try:
+        await interaction.response.send_message(
+            f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
+        )
+    except Exception as e:
+        logger.exception(
+            "Error sending cooldown confirmation to user %s(%d): %s",
+            interaction.user,
+            uid,
+            e,
+        )
 
     logger.info(
         "User %s(%d) set cooldown to %d seconds", interaction.user, uid, seconds
@@ -329,7 +362,16 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
     for kw in keywords:
         if kw not in bot.keyword_cache[uid]:
             bot.keyword_cache[uid].append(kw)
-    await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
+    
+    try:
+        await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
+    except Exception as e:
+        logger.exception(
+            "Error sending subscription confirmation to user %s(%d): %s",
+            interaction.user,
+            uid,
+            e,
+        )
 
     logger.info(
         "User %s(%d) is subscribing to keyword: %s", interaction.user, uid, keyword
@@ -349,7 +391,16 @@ async def notify_list(interaction: discord.Interaction):
         if keywords
         else "你還沒有訂閱任何關鍵字。"
     )
-    await interaction.response.send_message(msg, ephemeral=True)
+
+    try:
+        await interaction.response.send_message(msg, ephemeral=True)
+    except Exception as e:
+        logger.exception(
+            "Error sending keyword list to user %s(%d): %s",
+            interaction.user,
+            interaction.user.id,
+            e,
+        )
 
     logger.info(
         "User %s(%d) requested their keyword list",
@@ -386,9 +437,17 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
     if uid in bot.keyword_cache and kw in bot.keyword_cache[uid]:
         bot.keyword_cache[uid].remove(kw)
 
-    await interaction.response.send_message(
-        f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
-    )
+    try:
+        await interaction.response.send_message(
+            f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
+        )
+    except Exception as e:
+        logger.exception(
+            "Error sending unsubscription confirmation to user %s(%d): %s",
+            interaction.user,
+            uid,
+            e,
+        )
 
     logger.info(
         "User %s(%d) is unsubscribing from keyword: %s", interaction.user, uid, keyword
