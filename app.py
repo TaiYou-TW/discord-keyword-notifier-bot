@@ -476,11 +476,11 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
         conn.execute(
             "DELETE FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
         )
+
+        if uid in bot.keyword_cache and kw in bot.keyword_cache[uid]:
+            bot.keyword_cache[uid].remove(kw)
     conn.commit()
     conn.close()
-
-    if uid in bot.keyword_cache and kw in bot.keyword_cache[uid]:
-        bot.keyword_cache[uid].remove(kw)
 
     try:
         await interaction.followup.send(f"✅ 已取消訂閱：`{keyword}`", ephemeral=True)
