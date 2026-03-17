@@ -91,7 +91,9 @@ class MyBot(discord.Client):
 
         return time.time() - last_time < user_cooldown
 
-    async def send_notification(self, uid: int, message: discord.Message, kw: str)-> None:
+    async def send_notification(
+        self, uid: int, message: discord.Message, kw: str
+    ) -> None:
         target_user = await self.fetch_user(uid)
 
         embed = discord.Embed(
@@ -122,7 +124,7 @@ class MyBot(discord.Client):
             message.content,
         )
 
-    def update_last_notified(self, uid: int, kw: str)-> None:
+    def update_last_notified(self, uid: int, kw: str) -> None:
         self.last_notified[(uid, kw)] = time.time()
 
     def is_keyword_in_string(self, string: str, kw: str) -> bool:
@@ -159,6 +161,13 @@ class MyBot(discord.Client):
         # then check embeds
         for embed in message.embeds:
             if embed.title and self.is_keyword_in_string(embed.title, kw):
+                result = True
+                break
+            if (
+                embed.author
+                and embed.author.name
+                and self.is_keyword_in_string(embed.author.name, kw)
+            ):
                 result = True
                 break
             if embed.description and self.is_keyword_in_string(embed.description, kw):
@@ -225,7 +234,9 @@ class MyBot(discord.Client):
         conn.close()
         return result[0] if result else 0
 
-    async def can_send_permission_test_message(self, interaction: discord.Interaction)-> bool:
+    async def can_send_permission_test_message(
+        self, interaction: discord.Interaction
+    ) -> bool:
         try:
             embed = discord.Embed(
                 title="✅ 權限測試",
