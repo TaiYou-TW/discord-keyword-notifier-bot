@@ -102,8 +102,14 @@ class MyBot(discord.Client):
             timestamp=message.created_at,
             url=message.jump_url,
         )
-        embed.description = f"**內容：** {message.content[:200]}"
-        embed.add_field(name="來源", value=f"{message.channel.mention}")
+        embed.description = f"{message.content[:200]}"
+        embed.add_field(name="訊息任意門", value=f"{message.jump_url}")
+        embed.set_author(
+            name=message.channel.name if message.channel else "未知頻道",
+            icon_url=(
+                message.guild.icon.url if message.guild and message.guild.icon else None
+            ),
+        )
 
         try:
             await target_user.send(embed=embed)
