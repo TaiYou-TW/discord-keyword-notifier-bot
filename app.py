@@ -85,13 +85,13 @@ class MyBot(discord.Client):
         self.load_data()
         await self.tree.sync()
 
-    def is_user_still_cooldown(self, uid, kw):
+    def is_user_still_cooldown(self, uid: int, kw: str) -> bool:
         user_cooldown = self.cooldown_settings.get(uid, DEFAULT_COOLDOWN)
         last_time = self.last_notified.get((uid, kw), 0)
 
         return time.time() - last_time < user_cooldown
 
-    async def send_notification(self, uid, message, kw):
+    async def send_notification(self, uid: int, message: discord.Message, kw: str)-> None:
         target_user = await self.fetch_user(uid)
 
         embed = discord.Embed(
@@ -122,10 +122,10 @@ class MyBot(discord.Client):
             message.content,
         )
 
-    def update_last_notified(self, uid, kw):
+    def update_last_notified(self, uid: int, kw: str)-> None:
         self.last_notified[(uid, kw)] = time.time()
 
-    def is_keyword_in_string(self, string, kw):
+    def is_keyword_in_string(self, string: str, kw: str) -> bool:
         """
         Message Formatting according to Discord's Documentation:
         https://docs.discord.com/developers/reference#message-formatting
@@ -149,7 +149,7 @@ class MyBot(discord.Client):
 
         return kw in string
 
-    def is_trigger_keyword(self, message, kw):
+    def is_trigger_keyword(self, message: discord.Message, kw: str) -> bool:
         result = False
 
         # check content first
@@ -175,7 +175,7 @@ class MyBot(discord.Client):
 
         return result
 
-    async def cache_guild_members(self, guild):
+    async def cache_guild_members(self, guild: discord.Guild) -> None:
         if not self.intents.members:
             logger.warning(
                 "Members intent is disabled; cannot warm member cache for guild %s",
@@ -196,11 +196,11 @@ class MyBot(discord.Client):
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Failed to cache members for guild %s", guild.id)
 
-    async def warm_member_cache(self):
+    async def warm_member_cache(self) -> None:
         for guild in self.guilds:
             await self.cache_guild_members(guild)
 
-    async def is_user_in_same_guild(self, uid, message):
+    async def is_user_in_same_guild(self, uid: int, message: discord.Message) -> bool:
         if message.guild is None:
             return False
 
@@ -216,7 +216,7 @@ class MyBot(discord.Client):
         members = self.guild_member_ids.get(guild_id)
         return uid in members if members is not None else False
 
-    def has_permission_verified(self, uid):
+    def has_permission_verified(self, uid: int) -> bool:
         # Check if user has already verified permissions
         conn = sqlite3.connect(self.db_path)
         result = conn.execute(
@@ -225,7 +225,7 @@ class MyBot(discord.Client):
         conn.close()
         return result[0] if result else 0
 
-    async def can_send_permission_test_message(self, interaction: discord.Interaction):
+    async def can_send_permission_test_message(self, interaction: discord.Interaction)-> bool:
         try:
             embed = discord.Embed(
                 title="✅ 權限測試",
@@ -382,7 +382,7 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
     for kw in keywords:
         if kw not in bot.keyword_cache[uid]:
             bot.keyword_cache[uid].append(kw)
-    
+
     try:
         await interaction.followup.send(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
     except Exception as e:
@@ -462,9 +462,7 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
         bot.keyword_cache[uid].remove(kw)
 
     try:
-        await interaction.followup.send(
-            f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
-        )
+        await interaction.followup.send(f"✅ 已取消訂閱：`{keyword}`", ephemeral=True)
     except Exception as e:
         logger.exception(
             "Error sending unsubscription confirmation to user %s(%d): %s",
@@ -485,31 +483,31 @@ async def on_ready():
 
 
 @bot.event
-async def on_guild_join(guild):
+async def on_guild_join(guild: discord.Guild):
     await bot.cache_guild_members(guild)
 
 
 @bot.event
-async def on_guild_remove(guild):
+async def on_guild_remove(guild: discord.Guild):
     bot.guild_member_ids.pop(guild.id, None)
 
 
 @bot.event
-async def on_member_join(member):
+async def on_member_join(member: discord.Member):
     if member.guild.id not in bot.guild_member_ids:
         bot.guild_member_ids[member.guild.id] = set()
     bot.guild_member_ids[member.guild.id].add(member.id)
 
 
 @bot.event
-async def on_member_remove(member):
+async def on_member_remove(member: discord.Member):
     members = bot.guild_member_ids.get(member.guild.id)
     if members is not None:
         members.discard(member.id)
 
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
