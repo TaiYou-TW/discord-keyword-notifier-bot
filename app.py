@@ -123,11 +123,23 @@ class MyBot(discord.Client):
 
     def is_keyword_in_string(self, string, kw):
         """
-        ignore custom emojis, standard emojis, and URLs when checking for keyword presence
+        Message Formatting according to Discord's Documentation:
+        https://docs.discord.com/developers/reference#message-formatting
+
+        ignore emojis, user id, channel id, and URLs...
+        when checking for keyword presence
         """
         string = string.lower()
-        string = re.sub(r"<:\w+:\d+>", "", string)
         string = re.sub(r"<@\d+>", "", string)
+        string = re.sub(r"<@!\d+>", "", string)
+        string = re.sub(r"<#\d+>", "", string)
+        string = re.sub(r"<@&\d+>", "", string)
+        string = re.sub(r"</\w+:\d+>", "", string)
+        string = re.sub(r"<:\w+:\d+>", "", string)
+        string = re.sub(r"<a:\w+:\d+>", "", string)
+        string = re.sub(r"<t:\d+>", "", string)
+        string = re.sub(r"<t:\d+:\w>", "", string)
+        string = re.sub(r"<id:\w>", "", string)
         string = re.sub(r":\w+:", "", string)
         string = re.sub(r"https?://\S+", "", string)
 
