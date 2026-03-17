@@ -94,10 +94,14 @@ class MyBot(discord.Client):
     async def send_notification(self, uid, message, kw):
         target_user = await self.fetch_user(uid)
 
-        embed = discord.Embed(title=f"🔔 關鍵字 `{kw}` 命中", color=0x3498DB)
+        embed = discord.Embed(
+            title=f"🔔 關鍵字 `{kw}` 命中",
+            color=0x3498DB,
+            timestamp=message.created_at,
+            url=message.jump_url,
+        )
         embed.description = f"**內容：** {message.content[:200]}"
         embed.add_field(name="來源", value=f"{message.channel.mention}")
-        embed.add_field(name="連結", value=f"[點我跳轉]({message.jump_url})")
 
         try:
             await target_user.send(embed=embed)
