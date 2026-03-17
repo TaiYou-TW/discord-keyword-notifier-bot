@@ -219,7 +219,7 @@ class MyBot(discord.Client):
             await interaction.user.send(embed=embed)
         except discord.Forbidden:
             try:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 無法發送 DM 訊息！\n請檢查以下設定：\n"
                     "1. 確認你的 DM 是開放的（設定 > 內容與社交 > 社交權限 > 私人訊息）\n"
                     "2. 檢查是否有封鎖 Bot\n\n"
@@ -241,7 +241,7 @@ class MyBot(discord.Client):
             return False
         except Exception as e:
             try:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"⚠️ 發送測試訊息時出錯：{str(e)}", ephemeral=True
                 )
                 logger.exception(
@@ -267,9 +267,11 @@ bot = MyBot()
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
 @app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
+    await interaction.response.defer(ephemeral=True)
+
     if seconds < 0:
         try:
-            await interaction.response.send_message("秒數不能為負數！", ephemeral=True)
+            await interaction.followup.send("秒數不能為負數！", ephemeral=True)
         except Exception as e:
             logger.exception(
                 "Error sending cooldown error message to user %s(%d): %s",
@@ -295,7 +297,7 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
     bot.cooldown_settings[uid] = seconds
 
     try:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ 冷卻時間已設定為 `{seconds}` 秒。", ephemeral=True
         )
     except Exception as e:
@@ -314,6 +316,8 @@ async def notify_cooldown(interaction: discord.Interaction, seconds: int):
 @bot.tree.command(name="notify_add", description="訂閱關鍵字通知")
 @app_commands.describe(keyword="要訂閱的關鍵字（用 , 分隔）")
 async def notify_add(interaction: discord.Interaction, keyword: str):
+    await interaction.response.defer(ephemeral=True)
+
     keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
     permission_verified = bot.has_permission_verified(uid)
@@ -364,7 +368,7 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
             bot.keyword_cache[uid].append(kw)
     
     try:
-        await interaction.response.send_message(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
+        await interaction.followup.send(f"✅ 已訂閱：`{keyword}`", ephemeral=True)
     except Exception as e:
         logger.exception(
             "Error sending subscription confirmation to user %s(%d): %s",
@@ -380,6 +384,8 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
 
 @bot.tree.command(name="notify_list", description="查看所有訂閱關鍵字")
 async def notify_list(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
     conn = sqlite3.connect(bot.db_path)
     res = conn.execute(
         "SELECT keyword FROM user_keywords WHERE user_id = ?", (interaction.user.id,)
@@ -393,7 +399,7 @@ async def notify_list(interaction: discord.Interaction):
     )
 
     try:
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
     except Exception as e:
         logger.exception(
             "Error sending keyword list to user %s(%d): %s",
@@ -412,6 +418,8 @@ async def notify_list(interaction: discord.Interaction):
 @bot.tree.command(name="notify_remove", description="取消訂閱關鍵字通知")
 @app_commands.describe(keyword="要取消訂閱的關鍵字（用 , 分隔）")
 async def notify_remove(interaction: discord.Interaction, keyword: str):
+    await interaction.response.defer(ephemeral=True)
+
     keywords = keyword.lower().strip().split(",")
     uid = interaction.user.id
 
@@ -438,7 +446,7 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
         bot.keyword_cache[uid].remove(kw)
 
     try:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ 已取消訂閱：`{keyword}`", ephemeral=True
         )
     except Exception as e:
