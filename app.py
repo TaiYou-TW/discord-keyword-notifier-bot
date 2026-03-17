@@ -310,6 +310,9 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
 
     for kw in keywords:
         kw = kw.strip()
+        if len(kw) == 0:
+            continue
+
         res = conn.execute(
             "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
         ).fetchone()
@@ -364,6 +367,9 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
     conn = sqlite3.connect(bot.db_path)
     for kw in keywords:
         kw = kw.strip()
+        if len(kw) == 0:
+            continue
+
         res = conn.execute(
             "SELECT 1 FROM user_keywords WHERE user_id = ? AND keyword = ?", (uid, kw)
         ).fetchone()
