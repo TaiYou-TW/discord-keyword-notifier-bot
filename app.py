@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import re
@@ -97,10 +96,13 @@ class MyBot(discord.Client):
     ) -> None:
         target_user = await self.fetch_user(uid)
 
+        # get a image url from attachments or embeds if available
         image_url = None
         if message.attachments:
             for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith("image/"):
+                if attachment.content_type and attachment.content_type.startswith(
+                    "image/"
+                ):
                     image_url = attachment.url
                     break
         elif message.embeds:
@@ -125,12 +127,49 @@ class MyBot(discord.Client):
             message.guild.icon.url if message.guild and message.guild.icon else None
         )
 
-        embed.description = f"{message.content[:200]}"
-        embed.add_field(
-            name="\u200b", value=f"[傳送門]({message.jump_url})", inline=True
+        embed.description = (
+            f"{message.content[:200]}{'...' if len(message.content) > 200 else ''}"
         )
+
+        # try to emulate the message preview by extracting info from embeds
+        author_icon_url = None
+        if message.embeds:
+            embed_parts: list[str] = []
+            for orig in message.embeds:
+                section: list[str] = []
+                if orig.author and orig.author.name:
+                    author_image = (
+                        orig.author.icon_url if orig.author.icon_url else None
+                    )
+                    author_name = orig.author.name
+                    if author_image and not author_icon_url:
+                        author_icon_url = author_image
+                    section.append(f"**{author_name}**\n")
+                if orig.title:
+                    section.append(f"**{orig.title}**\n")
+                if orig.description:
+                    section.append(orig.description)
+                for field in orig.fields:
+                    section.append(f"**{field.name}** {field.value}")
+                if section:
+                    quoted = "> " + "\n> ".join("\n".join(section).splitlines())
+                    embed_parts.append(quoted)
+
+            if embed_parts:
+                nested = "\n\n".join(embed_parts)
+                nested = f"{nested[:200]}{'...' if len(nested) > 200 else ''}"
+                embed.add_field(name="\u200b", value=nested, inline=True)
+
+        if not image_url and author_icon_url:
+            embed.set_thumbnail(url=author_icon_url)
+
+        embed.add_field(
+            name="\u200b", value=f"[傳送門]({message.jump_url})", inline=False
+        )
+
         if image_url:
             embed.set_image(url=image_url)
+
         embed.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
 
         try:
@@ -314,26 +353,28 @@ class MyBot(discord.Client):
                 )
             return False
         return True
-    
-    def is_contain_link(self, text: str) -> bool:
-        return re.match(r"https?://\S+", text) is not None
-    
-    def if_need_to_refetch_message(self, message: discord.Message) -> bool:
-        if self.is_contain_link(message.content) and not message.embeds and not message.attachments:
-            return True
-        return False
-    
-    def refetch_message(self, message: discord.Message) -> discord.Message:
-        try:
-            return message.channel.fetch_message(message.id)
-        except Exception as e:
-            logger.exception(
-                "Error refetching message %s in channel %s: %s",
-                message.id,
-                message.channel.id,
-                e,
-            )
-            return message
+
+    async def check_and_notify(self, message: discord.Message):
+        for uid, keywords in bot.keyword_cache.items():
+            if message.author.id == uid:
+                continue
+
+            if not await bot.is_user_in_same_guild(uid, message):
+                continue
+
+            for kw in keywords:
+                if bot.is_trigger_keyword(message, kw):
+                    if bot.is_user_still_cooldown(uid, kw):
+                        continue
+
+                    try:
+                        await bot.send_notification(uid, message, kw)
+                        bot.update_last_notified(uid, kw)
+                        break
+                    except Exception as e:
+                        logger.exception(
+                            "Exception occurred while notifying user %s: %s", uid, e
+                        )
 
 
 bot = MyBot()
@@ -567,33 +608,23 @@ async def on_member_remove(member: discord.Member):
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author == bot.user:
+    if message.author == bot.user or message.author.bot:
         return
-    
-    if bot.if_need_to_refetch_message(message):
-        await asyncio.sleep(2)
-        message = await bot.refetch_message(message)
 
-    for uid, keywords in bot.keyword_cache.items():
-        if message.author.id == uid or message.author.bot:
-            continue
+    await bot.check_and_notify(message)
 
-        if not await bot.is_user_in_same_guild(uid, message):
-            continue
 
-        for kw in keywords:
-            if bot.is_trigger_keyword(message, kw):
-                if bot.is_user_still_cooldown(uid, kw):
-                    continue
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    if after.author == bot.user or after.author.bot:
+        return
 
-                try:
-                    await bot.send_notification(uid, message, kw)
-                    bot.update_last_notified(uid, kw)
-                    break
-                except Exception as e:
-                    logger.exception(
-                        "Exception occurred while notifying user %s: %s", uid, e
-                    )
+    if len(before.embeds) == 0 and len(after.embeds) > 0:
+        logger.debug(f"偵測到訊息產生預覽 Embed: {after.id}")
+        await bot.check_and_notify(after)
+    elif before.content != after.content:
+        logger.debug(f"偵測到訊息改變: {after.id}")
+        await bot.check_and_notify(after)
 
 
 bot.run(TOKEN)
