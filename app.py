@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -96,6 +97,21 @@ class MyBot(discord.Client):
     ) -> None:
         target_user = await self.fetch_user(uid)
 
+        image_url = None
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith("image/"):
+                    image_url = attachment.url
+                    break
+        elif message.embeds:
+            for embed in message.embeds:
+                if embed.image and embed.image.url:
+                    image_url = embed.image.url
+                    break
+                if embed.thumbnail and embed.thumbnail.url:
+                    image_url = embed.thumbnail.url
+                    break
+
         embed = discord.Embed(
             title=f"🔔 關鍵字 `{kw}` 命中",
             color=0x3498DB,
@@ -113,6 +129,8 @@ class MyBot(discord.Client):
         embed.add_field(
             name="\u200b", value=f"[傳送門]({message.jump_url})", inline=True
         )
+        if image_url:
+            embed.set_image(url=image_url)
         embed.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
 
         try:
@@ -296,6 +314,26 @@ class MyBot(discord.Client):
                 )
             return False
         return True
+    
+    def is_contain_link(self, text: str) -> bool:
+        return re.match(r"https?://\S+", text) is not None
+    
+    def if_need_to_refetch_message(self, message: discord.Message) -> bool:
+        if self.is_contain_link(message.content) and not message.embeds and not message.attachments:
+            return True
+        return False
+    
+    def refetch_message(self, message: discord.Message) -> discord.Message:
+        try:
+            return message.channel.fetch_message(message.id)
+        except Exception as e:
+            logger.exception(
+                "Error refetching message %s in channel %s: %s",
+                message.id,
+                message.channel.id,
+                e,
+            )
+            return message
 
 
 bot = MyBot()
@@ -531,6 +569,10 @@ async def on_member_remove(member: discord.Member):
 async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
+    
+    if bot.if_need_to_refetch_message(message):
+        await asyncio.sleep(2)
+        message = await bot.refetch_message(message)
 
     for uid, keywords in bot.keyword_cache.items():
         if message.author.id == uid or message.author.bot:
