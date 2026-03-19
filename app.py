@@ -164,15 +164,25 @@ class MyBot(discord.Client):
                 for stream in data:
                     stream_id = stream.get("id") or stream.get("video_id")
                     status = (stream.get("status") or stream.get("live_status") or "").lower()
+                    stream_channel_id = (
+                        stream.get("channel", {}).get("id")
+                        or stream.get("channel_id")
+                        or stream.get("owner", {}).get("id")
+                        or None
+                    )
+                    dedupe_key = (
+                        f"cid:{stream_channel_id}" if stream_channel_id else source_key
+                    )
+
                     if not stream_id:
                         logger.warning("Holodex stream missing id: %s", stream)
                         continue
 
                     if status == "live" or stream.get("is_live"):
                         stream_found = True
-                        if self.holodex_last_live.get(source_key) != stream_id:
-                            self.holodex_last_live[source_key] = stream_id
-                            self.holodex_last_upcoming.pop(source_key, None)
+                        if self.holodex_last_live.get(dedupe_key) != stream_id:
+                            self.holodex_last_live[dedupe_key] = stream_id
+                            self.holodex_last_upcoming.pop(dedupe_key, None)
                             if HOLODEX_NOTIFY_LIVE_CHANNEL_ID:
                                 await self.send_holodex_status_notification(
                                     stream,
@@ -183,8 +193,8 @@ class MyBot(discord.Client):
 
                     if status == "upcoming" or stream.get("is_upcoming"):
                         stream_found = True
-                        if self.holodex_last_upcoming.get(source_key) != stream_id:
-                            self.holodex_last_upcoming[source_key] = stream_id
+                        if self.holodex_last_upcoming.get(dedupe_key) != stream_id:
+                            self.holodex_last_upcoming[dedupe_key] = stream_id
                             if HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID:
                                 await self.send_holodex_status_notification(
                                     stream,
@@ -224,12 +234,20 @@ class MyBot(discord.Client):
                 # reverse so we send older content first
                 for video in reversed(upload_data):
                     video_id = video.get("id") or video.get("video_id")
+                    video_channel_id = (
+                        video.get("channel", {}).get("id")
+                        or video.get("channel_id")
+                        or video.get("owner", {}).get("id")
+                        or None
+                    )
+                    video_key = f"cid:{video_channel_id}" if video_channel_id else source_key
+
                     if not video_id:
                         continue
-                    if video_id in existing_uploads:
+                    if video_id in self.holodex_last_upload.get(video_key, set()):
                         continue
 
-                    existing_uploads.add(video_id)
+                    self.holodex_last_upload.setdefault(video_key, set()).add(video_id)
                     if HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID:
                         await self.send_holodex_status_notification(
                             video,
