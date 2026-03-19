@@ -819,6 +819,10 @@ async def on_member_remove(member: discord.Member):
 
 @bot.event
 async def on_message(message: discord.Message):
+    if bot.user in message.mentions:
+        await message.reply(":mocochan:")
+        return
+
     if message.author == bot.user or message.author.bot:
         return
 
