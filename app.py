@@ -1,8 +1,11 @@
+import asyncio
+import datetime
 import logging
 import os
 import re
 
 from dotenv import load_dotenv
+import aiohttp
 import discord
 from discord import app_commands
 import sqlite3
@@ -26,6 +29,19 @@ if not TOKEN:
 DB_PATH = os.getenv("DB_PATH", "keywords.db")
 DEFAULT_COOLDOWN = int(os.getenv("DEFAULT_COOLDOWN", "30"))
 
+HOLODEX_API_KEY = os.getenv("HOLODEX_API_KEY", "")
+HOLODEX_ORG = os.getenv("HOLODEX_ORG", "")
+HOLODEX_CHANNEL_IDS = [c.strip() for c in os.getenv("HOLODEX_CHANNEL_IDS", "").split(",") if c.strip()]
+HOLODEX_NOTIFY_LIVE_CHANNEL_ID = os.getenv("HOLODEX_NOTIFY_LIVE_CHANNEL_ID")
+HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID = os.getenv("HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID")
+HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID = os.getenv("HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID")
+
+HOLODEX_NOTIFY_LIVE_CHANNEL_ID = int(HOLODEX_NOTIFY_LIVE_CHANNEL_ID) if HOLODEX_NOTIFY_LIVE_CHANNEL_ID else None
+HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID = int(HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID) if HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID else None
+HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID = int(HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID) if HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID else None
+
+HOLODEX_POLL_INTERVAL = int(os.getenv("HOLODEX_POLL_INTERVAL", "60"))
+
 
 class MyBot(discord.Client):
     def __init__(self):
@@ -39,6 +55,10 @@ class MyBot(discord.Client):
         self.keyword_cache = {}  # { user_id: [kw1, kw2] }
         self.cooldown_settings = {}  # { user_id: seconds }
         self.last_notified = {}  # { (user_id, kw): timestamp }
+
+        self.holodex_last_live = {}  # { source_key: stream_id }
+        self.holodex_last_upcoming = {}  # { source_key: stream_id }
+        self.holodex_last_upload = {}  # { source_key: set(video_id) }
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
     def load_data(self):
@@ -83,6 +103,15 @@ class MyBot(discord.Client):
         logger.info("Database setup complete.")
 
         self.load_data()
+
+        if HOLODEX_CHANNEL_IDS and (HOLODEX_NOTIFY_LIVE_CHANNEL_ID or HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID or HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID):
+            logger.info(
+                "Starting Holodex monitor for channels: %s (interval %ds)",
+                HOLODEX_CHANNEL_IDS,
+                HOLODEX_POLL_INTERVAL,
+            )
+            self.loop.create_task(self.holodex_live_monitor())
+
         await self.tree.sync()
 
     def is_user_still_cooldown(self, uid: int, kw: str) -> bool:
@@ -90,6 +119,188 @@ class MyBot(discord.Client):
         last_time = self.last_notified.get((uid, kw), 0)
 
         return time.time() - last_time < user_cooldown
+
+    async def holodex_live_monitor(self) -> None:
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    await self.holodex_check_live(session)
+                except Exception:
+                    logger.exception("Holodex live monitor error")
+                await asyncio.sleep(HOLODEX_POLL_INTERVAL)
+
+    async def holodex_check_live(self, session: aiohttp.ClientSession) -> None:
+        if not HOLODEX_ORG and not HOLODEX_CHANNEL_IDS:
+            return
+
+        headers = {}
+        if HOLODEX_API_KEY:
+            headers["X-APIKEY"] = HOLODEX_API_KEY
+
+        sources = [HOLODEX_ORG] if HOLODEX_ORG else HOLODEX_CHANNEL_IDS
+        is_org = bool(HOLODEX_ORG)
+
+        for source in sources:
+            if is_org:
+                live_url = f"https://holodex.net/api/v2/live?org={source}"
+            else:
+                live_url = f"https://holodex.net/api/v2/live?channel_id={source}"
+
+            try:
+                async with session.get(live_url, headers=headers, timeout=20) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            "Holodex API returned %d for source %s", resp.status, source
+                        )
+                        continue
+                    data = await resp.json()
+            except Exception:
+                logger.exception("Failed to query Holodex for source %s", source)
+                continue
+
+            source_key = f"org:{source}" if is_org else f"cid:{source}"
+            stream_found = False
+            if isinstance(data, list) and data:
+                for stream in data:
+                    stream_id = stream.get("id") or stream.get("video_id")
+                    status = (stream.get("status") or stream.get("live_status") or "").lower()
+                    if not stream_id:
+                        logger.warning("Holodex stream missing id: %s", stream)
+                        continue
+
+                    if status == "live" or stream.get("is_live"):
+                        stream_found = True
+                        if self.holodex_last_live.get(source_key) != stream_id:
+                            self.holodex_last_live[source_key] = stream_id
+                            self.holodex_last_upcoming.pop(source_key, None)
+                            if HOLODEX_NOTIFY_LIVE_CHANNEL_ID:
+                                await self.send_holodex_status_notification(
+                                    stream,
+                                    HOLODEX_NOTIFY_LIVE_CHANNEL_ID,
+                                    "live"
+                                )
+                        continue
+
+                    if status == "upcoming" or stream.get("is_upcoming"):
+                        stream_found = True
+                        if self.holodex_last_upcoming.get(source_key) != stream_id:
+                            self.holodex_last_upcoming[source_key] = stream_id
+                            if HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID:
+                                await self.send_holodex_status_notification(
+                                    stream,
+                                    HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID,
+                                    "upcoming"
+                                )
+                        continue
+
+            if not stream_found:
+                self.holodex_last_live.pop(source_key, None)
+                self.holodex_last_upcoming.pop(source_key, None)
+
+            # 2) Check latest uploads (limit 5 to handle multiple new videos)
+            if is_org:
+                upload_url = f"https://holodex.net/api/v2/videos?org={source}&sort=published_at&limit=5"
+            else:
+                upload_url = f"https://holodex.net/api/v2/videos?channel_id={source}&sort=published_at&limit=5"
+
+            try:
+                async with session.get(upload_url, headers=headers, timeout=20) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            "Holodex upload API returned %d for source %s", resp.status, source
+                        )
+                        continue
+                    upload_data = await resp.json()
+            except Exception:
+                logger.exception("Failed to query Holodex uploads for source %s", source)
+                continue
+
+            if not isinstance(self.holodex_last_upload.get(source_key), set):
+                self.holodex_last_upload[source_key] = set()
+
+            existing_uploads = self.holodex_last_upload[source_key]
+
+            if isinstance(upload_data, list) and upload_data:
+                # reverse so we send older content first
+                for video in reversed(upload_data):
+                    video_id = video.get("id") or video.get("video_id")
+                    if not video_id:
+                        continue
+                    if video_id in existing_uploads:
+                        continue
+
+                    existing_uploads.add(video_id)
+                    if HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID:
+                        await self.send_holodex_status_notification(
+                            video,
+                            HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID,
+                            "upload"
+                        )
+
+    async def send_holodex_status_notification(self, stream: dict, notify_channel_id: int, stream_type: str) -> None:
+        if not notify_channel_id:
+            return
+
+        channel = self.get_channel(notify_channel_id)
+        if not channel:
+            logger.warning("Holodex notify channel %s not found", notify_channel_id)
+            return
+
+        stream_title = stream.get("title") or stream.get("video_title") or "No title"
+        channel_name = stream.get("channel", {}).get("name") or stream.get("channel_name")
+        stream_id = stream.get("id") or stream.get("video_id")
+        stream_url = stream.get("url") or stream.get("video_url")
+        if not stream_url and stream_id:
+            stream_url = f"https://www.youtube.com/watch?v={stream_id}"
+
+        stream_started = stream.get("started_at") or stream.get("published_at") or stream.get("scheduled_start_time")
+
+        if stream_type == "live":
+            title = f"🔴 直播開始：{channel_name or '頻道'}"
+            color = 0xE74C3C
+        elif stream_type == "upcoming":
+            title = f"⏰ 即將直播：{channel_name or '頻道'}"
+            color = 0xF1C40F
+        else:
+            title = f"🎬 新影片：{channel_name or '頻道'}"
+            color = 0x3498DB
+
+        embed = discord.Embed(
+            title=title,
+            description=stream_title,
+            url=stream_url,
+            color=color,
+        )
+
+        if stream_started:
+            try:
+                parsed_started = datetime.datetime.fromisoformat(stream_started.replace("Z", "+00:00"))
+                embed.timestamp = parsed_started
+            except Exception:
+                pass
+
+        if channel_name:
+            embed.set_author(name=channel_name)
+
+        thumbnail = stream.get("thumbnail") or stream.get("thumbnail_url")
+        if thumbnail:
+            embed.set_thumbnail(url=thumbnail)
+
+        desc_text = stream.get("description") or stream.get("display_message")
+        if desc_text:
+            embed.add_field(
+                name="描述",
+                value=desc_text[:950] + ("..." if len(desc_text) > 950 else ""),
+                inline=False,
+            )
+
+        if stream_url:
+            embed.add_field(name="連結", value=stream_url, inline=False)
+
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            logger.exception("Failed to send Holodex %s notification message", stream_type)
 
     async def send_notification(
         self, uid: int, message: discord.Message, kw: str
