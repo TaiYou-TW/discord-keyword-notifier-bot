@@ -678,13 +678,14 @@ async def notify_add(interaction: discord.Interaction, keyword: str):
 
         # Mark permission as verified only after successful test message
         conn = sqlite3.connect(bot.db_path)
+        original_seconds = bot.cooldown_settings.get(uid, DEFAULT_COOLDOWN)
         conn.execute(
             """
-            INSERT INTO user_settings (user_id, permission_verified)
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET permission_verified = excluded.permission_verified
+            INSERT INTO user_settings (user_id, permission_verified, seconds)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET permission_verified = excluded.permission_verified, seconds = excluded.seconds
             """,
-            (uid, 1),
+            (uid, 1, original_seconds),
         )
         conn.commit()
         conn.close()
