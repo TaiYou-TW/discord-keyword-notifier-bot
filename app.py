@@ -183,6 +183,7 @@ class MyBot(discord.Client):
                         if self.holodex_last_live.get(dedupe_key) != stream_id:
                             self.holodex_last_live[dedupe_key] = stream_id
                             self.holodex_last_upcoming.pop(dedupe_key, None)
+                            logger.info("Detected new live stream for source %s: %s", source, stream_id)
                             if HOLODEX_NOTIFY_LIVE_CHANNEL_ID:
                                 await self.send_holodex_status_notification(
                                     stream,
@@ -195,6 +196,7 @@ class MyBot(discord.Client):
                         stream_found = True
                         if self.holodex_last_upcoming.get(dedupe_key) != stream_id:
                             self.holodex_last_upcoming[dedupe_key] = stream_id
+                            logger.info("Detected new upcoming stream for source %s: %s", source, stream_id)
                             if HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID:
                                 await self.send_holodex_status_notification(
                                     stream,
@@ -228,8 +230,6 @@ class MyBot(discord.Client):
             if not isinstance(self.holodex_last_upload.get(source_key), set):
                 self.holodex_last_upload[source_key] = set()
 
-            existing_uploads = self.holodex_last_upload[source_key]
-
             if isinstance(upload_data, list) and upload_data:
                 # reverse so we send older content first
                 for video in reversed(upload_data):
@@ -248,6 +248,7 @@ class MyBot(discord.Client):
                         continue
 
                     self.holodex_last_upload.setdefault(video_key, set()).add(video_id)
+                    logger.info("Detected new upload for source %s: %s", source, video_id)
                     if HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID:
                         await self.send_holodex_status_notification(
                             video,
