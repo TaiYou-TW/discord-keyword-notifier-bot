@@ -345,6 +345,9 @@ class MyBot(discord.Client):
             logger.warning("Holodex notify channel %s not found", notify_channel_id)
             return
 
+        if not self.has_send_embed_permissions(channel):
+            return
+
         stream_title = stream.get("title") or stream.get("video_title") or "No title"
         channel_name = stream.get("channel", {}).get("name") or stream.get(
             "channel_name"
@@ -717,6 +720,24 @@ class MyBot(discord.Client):
                         logger.exception(
                             "Exception occurred while notifying user %s: %s", uid, e
                         )
+
+    def has_send_embed_permissions(self, channel: discord.TextChannel) -> bool:
+        permissions = channel.permissions_for(channel.guild.me)
+        if (
+            not permissions.send_messages
+            or not permissions.embed_links
+            or not permissions.attach_files
+        ):
+            logger.warning(
+                "Missing permissions for channel %s(%d): send_messages=%s, embed_links=%s, attach_files=%s",
+                channel.name,
+                channel.id,
+                permissions.send_messages,
+                permissions.embed_links,
+                permissions.attach_files,
+            )
+            return False
+        return True
 
 
 bot = MyBot()
