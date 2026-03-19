@@ -724,14 +724,16 @@ class MyBot(discord.Client):
     def has_send_embed_permissions(self, channel: discord.TextChannel) -> bool:
         permissions = channel.permissions_for(channel.guild.me)
         if (
-            not permissions.send_messages
+            not permissions.view_channel
+            or not permissions.send_messages
             or not permissions.embed_links
             or not permissions.attach_files
         ):
             logger.warning(
-                "Missing permissions for channel %s(%d): send_messages=%s, embed_links=%s, attach_files=%s",
+                "Missing permissions for channel %s(%d): view_channel=%s, send_messages=%s, embed_links=%s, attach_files=%s",
                 channel.name,
                 channel.id,
+                permissions.view_channel,
                 permissions.send_messages,
                 permissions.embed_links,
                 permissions.attach_files,
