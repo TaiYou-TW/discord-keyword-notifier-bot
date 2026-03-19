@@ -104,10 +104,10 @@ class MyBot(discord.Client):
 
         self.load_data()
 
-        if HOLODEX_CHANNEL_IDS and (HOLODEX_NOTIFY_LIVE_CHANNEL_ID or HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID or HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID):
+        if (HOLODEX_CHANNEL_IDS or HOLODEX_ORG) and (HOLODEX_NOTIFY_LIVE_CHANNEL_ID or HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID or HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID):
             logger.info(
                 "Starting Holodex monitor for channels: %s (interval %ds)",
-                HOLODEX_CHANNEL_IDS,
+                HOLODEX_CHANNEL_IDS or HOLODEX_ORG,
                 HOLODEX_POLL_INTERVAL,
             )
             self.loop.create_task(self.holodex_live_monitor())
