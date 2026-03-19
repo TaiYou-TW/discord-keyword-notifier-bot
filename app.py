@@ -83,7 +83,7 @@ class MyBot(discord.Client):
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
     def remember_holodex_notified_id(
-        self, cache: dict, source_key: str, item_id: str
+        self, cache: dict, source_key: str, item_id: str, notify_type: str = "live"
     ) -> bool:
         source_cache = cache.setdefault(source_key, {})
         if item_id in source_cache:
@@ -92,7 +92,19 @@ class MyBot(discord.Client):
         source_cache[item_id] = None
 
         while len(source_cache) > HOLODEX_MEMORY_LIMIT:
-            source_cache.pop(next(iter(source_cache)))
+            old_id = next(iter(source_cache))
+            source_cache.pop(old_id)
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                "INSERT OR IGNORE INTO holodex_notified (source_key, item_id, notify_type) VALUES (?, ?, ?)",
+                (source_key, item_id, notify_type),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.exception("Failed to save Holodex notified ID to database: %s", e)
 
         return True
 
@@ -117,9 +129,28 @@ class MyBot(discord.Client):
             f"Loaded {len(all_keywords)} keywords for {len(self.keyword_cache)} users."
         )
 
-        c.execute("SELECT user_id, seconds FROM user_settings")
-        for uid, sec in c.fetchall():
+        res = c.execute("SELECT user_id, seconds FROM user_settings")
+        for uid, sec in res.fetchall():
             self.cooldown_settings[uid] = sec
+        logger.info(
+            f"Loaded cooldown settings for {len(self.cooldown_settings)} users."
+        )
+
+        res = c.execute("SELECT source_key, item_id, notify_type FROM holodex_notified")
+        for source_key, item_id, notify_type in res.fetchall():
+            if notify_type == "live":
+                self.holodex_notified_live.setdefault(source_key, {})[item_id] = None
+            elif notify_type == "upcoming":
+                self.holodex_notified_upcoming.setdefault(source_key, {})[
+                    item_id
+                ] = None
+            elif notify_type == "upload":
+                self.holodex_notified_upload.setdefault(source_key, {})[item_id] = None
+        logger.info(
+            f"Loaded Holodex notified IDs: {sum(len(v) for v in self.holodex_notified_live.values())} live, "
+            f"{sum(len(v) for v in self.holodex_notified_upcoming.values())} upcoming, "
+            f"{sum(len(v) for v in self.holodex_notified_upload.values())} upload."
+        )
 
         conn.close()
 
@@ -134,6 +165,9 @@ class MyBot(discord.Client):
         )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, seconds INTEGER, permission_verified INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS holodex_notified (source_key TEXT, item_id TEXT, notify_type TEXT, PRIMARY KEY (source_key, item_id, notify_type))"
         )
 
         conn.commit()
@@ -212,7 +246,7 @@ class MyBot(discord.Client):
 
                     if status == "live" or stream.get("is_live"):
                         if self.remember_holodex_notified_id(
-                            self.holodex_notified_live, dedupe_key, stream_id
+                            self.holodex_notified_live, dedupe_key, stream_id, "live"
                         ):
                             logger.info(
                                 "Detected new live stream for source %s: %s",
@@ -227,7 +261,10 @@ class MyBot(discord.Client):
 
                     if status == "upcoming" or stream.get("is_upcoming"):
                         if self.remember_holodex_notified_id(
-                            self.holodex_notified_upcoming, dedupe_key, stream_id
+                            self.holodex_notified_upcoming,
+                            dedupe_key,
+                            stream_id,
+                            "upcoming",
                         ):
                             logger.info(
                                 "Detected new upcoming stream for source %s: %s",
@@ -285,7 +322,7 @@ class MyBot(discord.Client):
                     if not video_id:
                         continue
                     if not self.remember_holodex_notified_id(
-                        self.holodex_notified_upload, video_key, video_id
+                        self.holodex_notified_upload, video_key, video_id, "upload"
                     ):
                         continue
 
