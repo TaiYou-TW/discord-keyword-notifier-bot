@@ -20,6 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Add file handler for ERROR logs
+error_log_path = os.getenv("ERROR_LOG_PATH", "error.log")
+file_handler = logging.FileHandler(error_log_path, encoding="utf-8")
+file_handler.setLevel(logging.ERROR)
+file_formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+file_handler.setFormatter(file_formatter)
+logging.getLogger().addHandler(file_handler)
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError(
