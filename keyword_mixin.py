@@ -23,22 +23,23 @@ class KeywordMixin:
     ) -> None:
         target_user = await self.fetch_user(uid)
 
-        image_url = None
+        image_urls: list[str] = []
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith(
                     "image/"
                 ):
-                    image_url = attachment.url
-                    break
-        elif message.embeds:
-            for embed in message.embeds:
-                if embed.image and embed.image.url:
-                    image_url = embed.image.url
-                    break
-                if embed.thumbnail and embed.thumbnail.url:
-                    image_url = embed.thumbnail.url
-                    break
+                    image_urls.append(attachment.url)
+        if message.embeds:
+            for embed_obj in message.embeds:
+                if embed_obj.image and embed_obj.image.url:
+                    image_urls.append(embed_obj.image.url)
+                elif embed_obj.thumbnail and embed_obj.thumbnail.url:
+                    image_urls.append(embed_obj.thumbnail.url)
+
+        # Deduplicate while preserving order
+        seen = set()
+        image_urls = [u for u in image_urls if not (u in seen or seen.add(u))]
 
         embed = discord.Embed(
             title=f"🔔 關鍵字 `{kw}` 命中",
@@ -83,7 +84,7 @@ class KeywordMixin:
                 nested = f"{nested[:NOTIFICATION_MAX_DESCRIPTION_LENGTH]}{'...' if len(nested) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ''}"
                 embed.add_field(name=ZERO_WIDTH_SPACE, value=nested, inline=True)
 
-        if not image_url and author_icon_url:
+        if not image_urls and author_icon_url:
             embed.set_thumbnail(url=author_icon_url)
 
         embed.add_field(
@@ -92,13 +93,22 @@ class KeywordMixin:
             inline=False,
         )
 
-        if image_url:
-            embed.set_image(url=image_url)
+        if image_urls:
+            embed.set_image(url=image_urls[0])
 
         embed.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
 
+        extra_embeds: list[discord.Embed] = []
+        for extra_url in image_urls[1:]:
+            extra = discord.Embed(color=0x3498DB)
+            extra.set_image(url=extra_url)
+            extra_embeds.append(extra)
+
         try:
-            await target_user.send(embed=embed)
+            if extra_embeds:
+                await target_user.send(embeds=[embed, *extra_embeds])
+            else:
+                await target_user.send(embed=embed)
         except discord.Forbidden:
             logger.warning(
                 "Failed to send notification to %s(%d): Forbidden", target_user, uid
