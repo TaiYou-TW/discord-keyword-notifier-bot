@@ -29,7 +29,9 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
         # In-memory dedupe for keyword notification (message_id:keyword)
-        self.notified_message_keywords = set()  # Set[str], key = f"{message_id}:{keyword}"
+        self.notified_message_keywords = (
+            set()
+        )  # Set[str], key = f"{message_id}:{keyword}"
 
     async def setup_hook(self):
         logger.info("Setting up database...")
@@ -130,7 +132,6 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
                 )
             return False
         return True
-
 
 
 bot = MyBot()

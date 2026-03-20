@@ -18,13 +18,17 @@ class KeywordMixin:
 
         return time.time() - last_time < user_cooldown
 
-    async def send_notification(self, uid: int, message: discord.Message, kw: str) -> None:
+    async def send_notification(
+        self, uid: int, message: discord.Message, kw: str
+    ) -> None:
         target_user = await self.fetch_user(uid)
 
         image_url = None
         if message.attachments:
             for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith("image/"):
+                if attachment.content_type and attachment.content_type.startswith(
+                    "image/"
+                ):
                     image_url = attachment.url
                     break
         elif message.embeds:
@@ -57,7 +61,9 @@ class KeywordMixin:
             for orig in message.embeds:
                 section: list[str] = []
                 if orig.author and orig.author.name:
-                    author_image = orig.author.icon_url if orig.author.icon_url else None
+                    author_image = (
+                        orig.author.icon_url if orig.author.icon_url else None
+                    )
                     author_name = orig.author.name
                     if author_image and not author_icon_url:
                         author_icon_url = author_image
@@ -146,7 +152,9 @@ class KeywordMixin:
             if embed.description and self.is_keyword_in_string(embed.description, kw):
                 return True
             for field in embed.fields:
-                if self.is_keyword_in_string(field.name, kw) or self.is_keyword_in_string(field.value, kw):
+                if self.is_keyword_in_string(
+                    field.name, kw
+                ) or self.is_keyword_in_string(field.value, kw):
                     return True
         return False
 
@@ -183,3 +191,18 @@ class KeywordMixin:
             for _ in range(1000):
                 self.notified_message_keywords.pop()
 
+    async def is_user_in_same_guild(self, uid: int, message: discord.Message) -> bool:
+        if message.guild is None:
+            return False
+
+        guild_id = message.guild.id
+        members = self.guild_member_ids.get(guild_id)
+        if members is not None:
+            return uid in members
+
+        if message.guild.get_member(uid) is not None:
+            return True
+
+        await self.cache_guild_members(message.guild)
+        members = self.guild_member_ids.get(guild_id)
+        return uid in members if members is not None else False
