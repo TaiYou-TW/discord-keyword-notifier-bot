@@ -102,6 +102,7 @@ class KeywordMixin:
         for extra_url in image_urls[1:]:
             extra = discord.Embed(color=0x3498DB)
             extra.set_image(url=extra_url)
+            extra.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
             extra_embeds.append(extra)
 
         try:
