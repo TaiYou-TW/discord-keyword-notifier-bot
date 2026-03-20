@@ -133,5 +133,14 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
             return False
         return True
 
+    def has_permission_verified(self, uid: int) -> bool:
+        # Check if user has already verified permissions
+        conn = sqlite3.connect(self.db_path)
+        result = conn.execute(
+            "SELECT permission_verified FROM user_settings WHERE user_id = ?", (uid,)
+        ).fetchone()
+        conn.close()
+        return result[0] if result else 0
+
 
 bot = MyBot()
