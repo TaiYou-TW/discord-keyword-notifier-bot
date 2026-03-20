@@ -61,6 +61,8 @@ class MyBot(discord.Client):
         self.holodex_last_upload = {}  # { source_key: set(video_id) }
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
+        # In-memory dedupe for keyword notification (message_id:keyword)
+        self.notified_message_keywords = set()  # Set[str], key = f"{message_id}:{keyword}"
     def load_data(self):
         logger.info("Loading data from database...")
 
@@ -584,7 +586,7 @@ class MyBot(discord.Client):
             return False
         return True
 
-    async def check_and_notify(self, message: discord.Message):
+    async def check_and_notify(self, message: discord.Message) -> None:
         for uid, keywords in bot.keyword_cache.items():
             if message.author.id == uid:
                 continue
@@ -593,18 +595,32 @@ class MyBot(discord.Client):
                 continue
 
             for kw in keywords:
-                if bot.is_trigger_keyword(message, kw):
-                    if bot.is_user_still_cooldown(uid, kw):
-                        continue
+                if not bot.is_trigger_keyword(message, kw):
+                    continue
 
-                    try:
-                        await bot.send_notification(uid, message, kw)
-                        bot.update_last_notified(uid, kw)
-                        break
-                    except Exception as e:
-                        logger.exception(
-                            "Exception occurred while notifying user %s: %s", uid, e
-                        )
+                if bot.is_user_still_cooldown(uid, kw):
+                    continue
+
+                notification_key = f"{message.id}:{uid}:{kw}"
+                if notification_key in self.notified_message_keywords:
+                    continue
+
+                try:
+                    await bot.send_notification(uid, message, kw)
+                    bot.update_last_notified(uid, kw)
+                    self.notified_message_keywords.add(notification_key)
+                    break
+                except Exception as e:
+                    logger.exception(
+                        "Exception occurred while notifying user %s: %s", uid, e
+                    )
+                    # don't mark as notified if failing
+
+        # prevent memory leak
+        if len(self.notified_message_keywords) > 5000:
+            for _ in range(1000):
+                self.notified_message_keywords.pop()
+
 
 
 bot = MyBot()
