@@ -134,6 +134,13 @@ class KeywordMixin:
         string = re.sub(r":\w+:", "", string)
         string = re.sub(r"https?://\S+", "", string)
 
+        # Use ASCII word boundaries for keywords containing ASCII word chars.
+        # This avoids matching substrings like 'pp' inside 'app', while still
+        # matching '中文pp測試' and 'foo pp zoo'.
+        if re.search(r"[A-Za-z0-9_]", kw):
+            pattern = r"(?<![A-Za-z0-9_])" + re.escape(kw) + r"(?![A-Za-z0-9_])"
+            return bool(re.search(pattern, string))
+
         return kw in string
 
     def is_trigger_keyword(self, message: discord.Message, kw: str) -> bool:
