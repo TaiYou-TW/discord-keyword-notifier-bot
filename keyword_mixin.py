@@ -100,9 +100,10 @@ class KeywordMixin:
 
         extra_embeds: list[discord.Embed] = []
         for extra_url in image_urls[1:]:
-            extra = discord.Embed(color=0x3498DB)
+            # set url as same as message jump url to make multi-image preview in one embed
+            # and don't set other properties to avoid this trick failed
+            extra = discord.Embed(color=0x3498DB, url=message.jump_url)
             extra.set_image(url=extra_url)
-            extra.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
             extra_embeds.append(extra)
 
         try:
