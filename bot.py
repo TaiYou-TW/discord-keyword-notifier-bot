@@ -6,9 +6,10 @@ from discord import app_commands
 from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
+from twitter_syndication import TwitterSyndicationMixin
 
 
-class MyBot(HolodexMixin, KeywordMixin, discord.Client):
+class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -26,6 +27,8 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
         self.holodex_notified_live = {}
         self.holodex_notified_upcoming = {}
         self.holodex_notified_upload = {}
+        self.twitter_profile_notified = {}
+        self.twitter_monitor_task = None
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
 
         # In-memory dedupe for keyword notification (message_id:keyword)
@@ -46,12 +49,16 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
         conn.execute(
             "CREATE TABLE IF NOT EXISTS holodex_notified (source_key TEXT, item_id TEXT, notify_type TEXT, PRIMARY KEY (source_key, item_id, notify_type))"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS twitter_profile_notified (screen_name TEXT, tweet_id TEXT, PRIMARY KEY (screen_name, tweet_id))"
+        )
         conn.commit()
         conn.close()
 
         logger.info("Database setup complete.")
 
         self.load_data()
+        self.load_twitter_profile_data()
 
         await self.tree.sync()
 

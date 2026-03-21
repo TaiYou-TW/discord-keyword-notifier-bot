@@ -6,6 +6,9 @@ from config import (
     HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID,
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
+    TWITTER_NOTIFY_CHANNEL_ID,
+    TWITTER_POLL_INTERVAL,
+    TWITTER_SCREEN_NAMES,
     logger,
 )
 
@@ -26,6 +29,15 @@ async def on_ready():
             HOLODEX_POLL_INTERVAL,
         )
         bot.loop.create_task(bot.holodex_live_monitor())
+
+    if TWITTER_SCREEN_NAMES and TWITTER_NOTIFY_CHANNEL_ID:
+        logger.info(
+            "Starting Twitter profile monitor for accounts: %s (interval %ds)",
+            TWITTER_SCREEN_NAMES,
+            TWITTER_POLL_INTERVAL,
+        )
+        if bot.twitter_monitor_task is None or bot.twitter_monitor_task.done():
+            bot.twitter_monitor_task = bot.loop.create_task(bot.twitter_profile_monitor())
 
 
 @bot.event
