@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+from random import random
 import re
 import sqlite3
 
@@ -15,6 +16,9 @@ from config import (
     TWITTER_POLL_INTERVAL,
     TWITTER_SCREEN_NAMES,
     TWITTER_SYNDICATION_USER_AGENT,
+    TWITTER_WAIT_BETWEEN_PROFILES,
+    TWITTER_WORKER_COUNT,
+    TWITTER_WORKER_START_DELAY,
     logger,
 )
 
@@ -66,54 +70,115 @@ class TwitterSyndicationMixin:
         if not TWITTER_SCREEN_NAMES or not TWITTER_NOTIFY_CHANNEL_ID:
             return
 
-        headers = {"User-Agent": TWITTER_SYNDICATION_USER_AGENT}
+        headers = {"User-Agent": random.choice(TWITTER_SYNDICATION_USER_AGENT)}
         async with aiohttp.ClientSession(headers=headers) as session:
-            while True:
-                logger.info("Checking Twitter...")
+            worker_groups = self.build_worker_groups(TWITTER_SCREEN_NAMES)
+            logger.info(
+                "Starting Twitter workers: %d workers for %d profiles",
+                len(worker_groups),
+                len(TWITTER_SCREEN_NAMES),
+            )
+
+            tasks = []
+            for idx, group in enumerate(worker_groups):
+                initial_delay = idx * TWITTER_WORKER_START_DELAY
+                task = asyncio.create_task(
+                    self.twitter_worker_loop(
+                        session=session,
+                        worker_index=idx,
+                        profiles=group,
+                        initial_delay=initial_delay,
+                    )
+                )
+                tasks.append(task)
+
+            await asyncio.gather(*tasks)
+
+    def build_worker_groups(self, screen_names: list[str]) -> list[list[str]]:
+        workers = max(1, TWITTER_WORKER_COUNT)
+        workers = min(workers, max(1, len(screen_names)))
+        groups: list[list[str]] = [[] for _ in range(workers)]
+
+        for idx, name in enumerate(screen_names):
+            groups[idx % workers].append(name)
+
+        return groups
+
+    async def twitter_worker_loop(
+        self,
+        session: aiohttp.ClientSession,
+        worker_index: int,
+        profiles: list[str],
+        initial_delay: int,
+    ) -> None:
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+
+        while True:
+            logger.info(
+                "Worker %d checking %d profiles",
+                worker_index,
+                len(profiles),
+            )
+
+            for raw_name in profiles:
+                screen_name = raw_name.strip()
+                if not screen_name:
+                    continue
+
                 try:
-                    await self.twitter_check_profiles(session)
+                    await self.twitter_check_profile(session, screen_name)
                 except Exception:
-                    logger.exception("Twitter profile monitor error")
-                await asyncio.sleep(TWITTER_POLL_INTERVAL)
+                    logger.exception(
+                        "Worker %d failed profile %s",
+                        worker_index,
+                        screen_name,
+                    )
 
-    async def twitter_check_profiles(self, session: aiohttp.ClientSession) -> None:
-        for raw_name in TWITTER_SCREEN_NAMES:
-            screen_name = raw_name.strip()
-            if not screen_name:
+                if TWITTER_WAIT_BETWEEN_PROFILES > 0:
+                    await asyncio.sleep(TWITTER_WAIT_BETWEEN_PROFILES)
+
+            await asyncio.sleep(TWITTER_POLL_INTERVAL)
+
+    async def twitter_check_profile(
+        self, session: aiohttp.ClientSession, screen_name: str
+    ) -> None:
+        try:
+            tweets = await self.fetch_profile_tweets(session, screen_name)
+        except Exception:
+            logger.exception(
+                "Failed to fetch Twitter profile timeline: %s", screen_name
+            )
+            return
+
+        if not tweets:
+            return
+
+        key = screen_name.lower()
+        had_cache_before = bool(self.twitter_profile_notified.get(key))
+
+        for tweet in tweets:
+            tweet_id = str(tweet.get("id_str") or tweet.get("id") or "")
+            if not tweet_id:
                 continue
 
-            try:
-                tweets = await self.fetch_profile_tweets(session, screen_name)
-            except Exception:
-                logger.exception(
-                    "Failed to fetch Twitter profile timeline: %s", screen_name
-                )
+            if not self.remember_twitter_notified_id(screen_name, tweet_id):
                 continue
 
-            if not tweets:
+            # Warm up cache on first fetch to avoid flooding old tweets.
+            if not had_cache_before:
                 continue
 
-            key = screen_name.lower()
-            had_cache_before = bool(self.twitter_profile_notified.get(key))
+            logger.info("Detected new tweet for @%s: %s", screen_name, tweet_id)
+            await self.send_twitter_tweet_notification(
+                screen_name=screen_name,
+                tweet=tweet,
+                notify_channel_id=TWITTER_NOTIFY_CHANNEL_ID,
+            )
 
-            for tweet in tweets:
-                tweet_id = str(tweet.get("id_str") or tweet.get("id") or "")
-                if not tweet_id:
-                    continue
-
-                if not self.remember_twitter_notified_id(screen_name, tweet_id):
-                    continue
-
-                # Warm up cache on first fetch to avoid flooding old tweets.
-                if not had_cache_before:
-                    continue
-
-                logger.info("Detected new tweet for @%s: %s", screen_name, tweet_id)
-                await self.send_twitter_tweet_notification(
-                    screen_name=screen_name,
-                    tweet=tweet,
-                    notify_channel_id=TWITTER_NOTIFY_CHANNEL_ID,
-                )
+            await asyncio.sleep(
+                1
+            )  # Small delay between notifications to avoid rate limits
 
     async def fetch_profile_tweets(
         self, session: aiohttp.ClientSession, screen_name: str
