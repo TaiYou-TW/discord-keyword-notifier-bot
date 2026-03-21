@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+import random
 
 import aiohttp
 import discord
@@ -148,7 +149,7 @@ class TwitterSyndicationMixin:
         if not TWITTER_SCREEN_NAMES or not TWITTER_NOTIFY_CHANNEL_ID:
             return
 
-        headers = {"User-Agent": TWITTER_SYNDICATION_USER_AGENT}
+        headers = {"User-Agent": random.choice(TWITTER_SYNDICATION_USER_AGENT)}
         async with aiohttp.ClientSession(headers=headers) as session:
             self.init_twitter_rate_limit_state()
 
