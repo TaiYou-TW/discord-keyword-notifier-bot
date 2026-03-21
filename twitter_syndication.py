@@ -1,9 +1,9 @@
 import asyncio
 import datetime
 import json
-import random
 import re
 import sqlite3
+import time
 
 import aiohttp
 import discord
@@ -16,6 +16,7 @@ from config import (
     TWITTER_POLL_INTERVAL,
     TWITTER_SCREEN_NAMES,
     TWITTER_SYNDICATION_USER_AGENT,
+    TWITTER_RATE_LIMIT_RESERVE,
     TWITTER_WAIT_BETWEEN_PROFILES,
     TWITTER_WORKER_COUNT,
     TWITTER_WORKER_START_DELAY,
@@ -23,8 +24,85 @@ from config import (
 )
 
 
+class TwitterRateLimitedError(Exception):
+    pass
+
+
 class TwitterSyndicationMixin:
     db_path = DB_PATH
+
+    def init_twitter_rate_limit_state(self) -> None:
+        self.twitter_rate_limit_lock = asyncio.Lock()
+        self.twitter_rate_limit_limit = None
+        self.twitter_rate_limit_remaining = None
+        self.twitter_rate_limit_reset_epoch = None
+
+    async def wait_for_rate_limit_slot(self) -> None:
+        while True:
+            sleep_seconds = 0
+
+            async with self.twitter_rate_limit_lock:
+                now = time.time()
+                if (
+                    self.twitter_rate_limit_reset_epoch is not None
+                    and now >= self.twitter_rate_limit_reset_epoch
+                ):
+                    self.twitter_rate_limit_limit = None
+                    self.twitter_rate_limit_remaining = None
+                    self.twitter_rate_limit_reset_epoch = None
+
+                if (
+                    self.twitter_rate_limit_remaining is not None
+                    and self.twitter_rate_limit_reset_epoch is not None
+                    and now < self.twitter_rate_limit_reset_epoch
+                    and self.twitter_rate_limit_remaining <= TWITTER_RATE_LIMIT_RESERVE
+                ):
+                    sleep_seconds = max(
+                        1, int(self.twitter_rate_limit_reset_epoch - now) + 1
+                    )
+                else:
+                    if (
+                        self.twitter_rate_limit_remaining is not None
+                        and self.twitter_rate_limit_reset_epoch is not None
+                        and now < self.twitter_rate_limit_reset_epoch
+                        and self.twitter_rate_limit_remaining > 0
+                    ):
+                        self.twitter_rate_limit_remaining -= 1
+                    return
+
+            logger.warning(
+                "Twitter rate limit guard waiting %ds (remaining=%s, reserve=%d)",
+                sleep_seconds,
+                self.twitter_rate_limit_remaining,
+                TWITTER_RATE_LIMIT_RESERVE,
+            )
+            await asyncio.sleep(sleep_seconds)
+
+    async def update_rate_limit_state(self, resp: aiohttp.ClientResponse) -> None:
+        limit = resp.headers.get("x-rate-limit-limit")
+        remaining = resp.headers.get("x-rate-limit-remaining")
+        reset = resp.headers.get("x-rate-limit-reset")
+
+        parsed_limit = None
+        parsed_remaining = None
+        parsed_reset = None
+        try:
+            if limit is not None:
+                parsed_limit = int(limit)
+            if remaining is not None:
+                parsed_remaining = int(remaining)
+            if reset is not None:
+                parsed_reset = int(reset)
+        except ValueError:
+            return
+
+        async with self.twitter_rate_limit_lock:
+            if parsed_limit is not None:
+                self.twitter_rate_limit_limit = parsed_limit
+            if parsed_remaining is not None:
+                self.twitter_rate_limit_remaining = parsed_remaining
+            if parsed_reset is not None:
+                self.twitter_rate_limit_reset_epoch = parsed_reset
 
     def load_twitter_profile_data(self) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -70,29 +148,62 @@ class TwitterSyndicationMixin:
         if not TWITTER_SCREEN_NAMES or not TWITTER_NOTIFY_CHANNEL_ID:
             return
 
-        headers = {"User-Agent": random.choice(TWITTER_SYNDICATION_USER_AGENT)}
+        headers = {"User-Agent": TWITTER_SYNDICATION_USER_AGENT}
         async with aiohttp.ClientSession(headers=headers) as session:
-            worker_groups = self.build_worker_groups(TWITTER_SCREEN_NAMES)
-            logger.info(
-                "Starting Twitter workers: %d workers for %d profiles",
-                len(worker_groups),
-                len(TWITTER_SCREEN_NAMES),
-            )
+            self.init_twitter_rate_limit_state()
 
-            tasks = []
-            for idx, group in enumerate(worker_groups):
-                initial_delay = idx * TWITTER_WORKER_START_DELAY
-                task = asyncio.create_task(
-                    self.twitter_worker_loop(
-                        session=session,
-                        worker_index=idx,
-                        profiles=group,
-                        initial_delay=initial_delay,
-                    )
+            while True:
+                worker_groups = self.build_worker_groups(TWITTER_SCREEN_NAMES)
+                logger.info(
+                    "Starting Twitter round: %d workers for %d profiles",
+                    len(worker_groups),
+                    len(TWITTER_SCREEN_NAMES),
                 )
-                tasks.append(task)
 
-            await asyncio.gather(*tasks)
+                tasks = []
+                for idx, group in enumerate(worker_groups):
+                    initial_delay = idx * TWITTER_WORKER_START_DELAY
+                    task = asyncio.create_task(
+                        self.twitter_worker_round(
+                            session=session,
+                            worker_index=idx,
+                            profiles=group,
+                            initial_delay=initial_delay,
+                        )
+                    )
+                    tasks.append(task)
+
+                round_rate_limited = False
+                try:
+                    done, pending = await asyncio.wait(
+                        tasks, return_when=asyncio.FIRST_EXCEPTION
+                    )
+
+                    for t in done:
+                        exc = t.exception()
+                        if isinstance(exc, TwitterRateLimitedError):
+                            round_rate_limited = True
+                            break
+                        if exc is not None:
+                            logger.exception("Twitter worker failed", exc_info=exc)
+
+                    if round_rate_limited:
+                        logger.warning(
+                            "429 detected. Canceling all workers and waiting %ds before next round.",
+                            TWITTER_POLL_INTERVAL,
+                        )
+                        for p in pending:
+                            p.cancel()
+                        await asyncio.gather(*pending, return_exceptions=True)
+                    else:
+                        # First-exception wait may return with no pending when all workers finish.
+                        await asyncio.gather(*pending, return_exceptions=True)
+                finally:
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+
+                await asyncio.sleep(TWITTER_POLL_INTERVAL)
 
     def build_worker_groups(self, screen_names: list[str]) -> list[list[str]]:
         workers = max(1, TWITTER_WORKER_COUNT)
@@ -104,7 +215,7 @@ class TwitterSyndicationMixin:
 
         return groups
 
-    async def twitter_worker_loop(
+    async def twitter_worker_round(
         self,
         session: aiohttp.ClientSession,
         worker_index: int,
@@ -114,42 +225,35 @@ class TwitterSyndicationMixin:
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
 
-        while True:
-            logger.info(
-                "Worker %d checking %d profiles",
-                worker_index,
-                len(profiles),
-            )
+        logger.info(
+            "Worker %d checking %d profiles",
+            worker_index,
+            len(profiles),
+        )
 
-            for raw_name in profiles:
-                screen_name = raw_name.strip()
-                if not screen_name:
-                    continue
+        for raw_name in profiles:
+            screen_name = raw_name.strip()
+            if not screen_name:
+                continue
 
-                try:
-                    await self.twitter_check_profile(session, screen_name)
-                except Exception:
-                    logger.exception(
-                        "Worker %d failed profile %s",
-                        worker_index,
-                        screen_name,
-                    )
+            try:
+                await self.twitter_check_profile(session, screen_name)
+            except TwitterRateLimitedError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Worker %d failed profile %s",
+                    worker_index,
+                    screen_name,
+                )
 
-                if TWITTER_WAIT_BETWEEN_PROFILES > 0:
-                    await asyncio.sleep(TWITTER_WAIT_BETWEEN_PROFILES)
-
-            await asyncio.sleep(TWITTER_POLL_INTERVAL)
+            if TWITTER_WAIT_BETWEEN_PROFILES > 0:
+                await asyncio.sleep(TWITTER_WAIT_BETWEEN_PROFILES)
 
     async def twitter_check_profile(
         self, session: aiohttp.ClientSession, screen_name: str
     ) -> None:
-        try:
-            tweets = await self.fetch_profile_tweets(session, screen_name)
-        except Exception:
-            logger.exception(
-                "Failed to fetch Twitter profile timeline: %s", screen_name
-            )
-            return
+        tweets = await self.fetch_profile_tweets(session, screen_name)
 
         if not tweets:
             return
@@ -188,7 +292,13 @@ class TwitterSyndicationMixin:
             f"screen-name/{screen_name}"
         )
 
+        await self.wait_for_rate_limit_slot()
+
         async with session.get(url, timeout=20) as resp:
+            await self.update_rate_limit_state(resp)
+
+            if resp.status == 429:
+                raise TwitterRateLimitedError("Twitter syndication API returned 429")
             if resp.status != 200:
                 raise RuntimeError(f"Twitter syndication API returned {resp.status}")
             html = await resp.text()

@@ -42,6 +42,7 @@ docker compose up --build
 | `TWITTER_WORKER_COUNT`          | 並行 worker 數量                      | `4`    |
 | `TWITTER_WAIT_BETWEEN_PROFILES` | 同一 worker 內每個 profile 間隔（秒） | `3`    |
 | `TWITTER_WORKER_START_DELAY`    | worker 啟動錯開間隔（秒）             | `2`    |
+| `TWITTER_RATE_LIMIT_RESERVE`    | 低於此剩餘配額時先等 reset 再抓       | `2`    |
 | `TWITTER_MEMORY_LIMIT`          | 每個帳號 dedupe 記憶上限              | `2000` |
 
 Twitter 請求 endpoint：
