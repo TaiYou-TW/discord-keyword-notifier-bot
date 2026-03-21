@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 import json
-from random import random
+import random
 import re
 import sqlite3
 
