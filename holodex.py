@@ -121,6 +121,7 @@ class HolodexMixin:
     async def holodex_live_monitor(self) -> None:
         async with aiohttp.ClientSession() as session:
             while True:
+                logger.info("Checking Holodex...")
                 try:
                     await self.holodex_check_live(session)
                 except Exception:

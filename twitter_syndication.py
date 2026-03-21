@@ -69,6 +69,7 @@ class TwitterSyndicationMixin:
         headers = {"User-Agent": TWITTER_SYNDICATION_USER_AGENT}
         async with aiohttp.ClientSession(headers=headers) as session:
             while True:
+                logger.info("Checking Twitter...")
                 try:
                     await self.twitter_check_profiles(session)
                 except Exception:
