@@ -1,9 +1,9 @@
 import sqlite3
-
+import random
 import discord
 from discord import app_commands
 
-from config import DB_PATH, logger
+from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
 
@@ -141,6 +141,13 @@ class MyBot(HolodexMixin, KeywordMixin, discord.Client):
         ).fetchone()
         conn.close()
         return result[0] if result else 0
+
+    async def reply_when_mentioned(self, message: discord.Message) -> None:
+        # reply emoji2 10% of the time, emoji1 90% of the time
+        if random.random() < 0.1:
+            await message.reply(MENTIONED_EMOJI2)
+        else:
+            await message.reply(MENTIONED_EMOJI)
 
 
 bot = MyBot()

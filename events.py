@@ -6,7 +6,6 @@ from config import (
     HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID,
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
-    MENTIONED_EMOJI,
     logger,
 )
 
@@ -56,10 +55,10 @@ async def on_member_remove(member):
 @bot.event
 async def on_message(message):
     if bot.user in message.mentions:
-        await message.reply(MENTIONED_EMOJI)
+        await bot.reply_when_mentioned(message)
         return
 
-    if message.author == bot.user or message.author.bot:
+    if message.author == bot.user:
         return
 
     await bot.check_and_notify(message)
@@ -67,7 +66,7 @@ async def on_message(message):
 
 @bot.event
 async def on_message_edit(before, after):
-    if after.author == bot.user or after.author.bot:
+    if after.author == bot.user:
         return
 
     if len(before.embeds) == 0 and len(after.embeds) > 0:
