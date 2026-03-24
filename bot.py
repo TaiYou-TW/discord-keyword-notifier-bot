@@ -278,7 +278,7 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
 
     async def reply_when_mentioned(self, message: discord.Message) -> None:
         # cool feature for admins only
-        if message.author in ADMIN_USER_IDS:
+        if message.author.id in ADMIN_USER_IDS:
             if message.mentions > 1:
                 for user in message.mentions:
                     if user.id == self.user.id:
