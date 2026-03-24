@@ -52,6 +52,9 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS twitter_profile_notified (screen_name TEXT, tweet_id TEXT, PRIMARY KEY (screen_name, tweet_id))"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS emoji_usage (user_id INTEGER, emoji TEXT, count INTEGER DEFAULT 1, last_used INTEGER, PRIMARY KEY (user_id, emoji))"
+        )
         conn.commit()
         conn.close()
 
@@ -148,6 +151,94 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         ).fetchone()
         conn.close()
         return result[0] if result else 0
+
+    async def record_emoji_usage(self, user_id: int, emoji: str) -> None:
+        """Record emoji usage for statistics"""
+        import time
+        current_time = int(time.time())
+        
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO emoji_usage (user_id, emoji, count, last_used)
+            VALUES (?, ?, 1, ?)
+            ON CONFLICT(user_id, emoji) DO UPDATE SET 
+                count = count + 1,
+                last_used = excluded.last_used
+            """,
+            (user_id, emoji, current_time)
+        )
+        conn.commit()
+        conn.close()
+
+    async def scan_channel_history(self, channel: discord.TextChannel, limit: int = 1000) -> tuple[int, int]:
+        """Scan channel history for emoji usage statistics"""
+        import re
+        
+        messages_scanned = 0
+        emojis_found = 0
+        
+        # Match Discord custom emojis (both static and animated)
+        custom_emoji_pattern = r'<a?:\w+:\d+>'
+        # For Unicode emojis
+        unicode_emoji_pattern = r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002500-\U00002BEF\U00002702-\U000027B0\U00002702-\U000027B0\U000024C2-\U0001F251\U0001f926-\U0001f937\U00010000-\U0010ffff\U0001f1e6-\U0001f1ff]'
+        
+        try:
+            # If limit is None, use None to get all messages (no limit)
+            async for message in channel.history(limit=limit):
+                if message.author.bot:
+                    continue
+                    
+                messages_scanned += 1
+                
+                # Extract emojis from message content
+                custom_emojis = re.findall(custom_emoji_pattern, message.content)
+                unicode_emojis = re.findall(unicode_emoji_pattern, message.content)
+                all_emojis = custom_emojis + unicode_emojis
+                
+                # Record each emoji usage
+                for emoji in all_emojis:
+                    await self.record_emoji_usage(message.author.id, emoji)
+                    emojis_found += 1
+                    
+        except discord.Forbidden:
+            logger.warning(f"Cannot access history for channel {channel.name} ({channel.id})")
+        except Exception as e:
+            logger.exception(f"Error scanning channel {channel.name} ({channel.id}): {e}")
+            
+        return messages_scanned, emojis_found
+
+    async def scan_guild_history(self, guild: discord.Guild, limit_per_channel: int = 1000, unlimited: bool = False) -> tuple[int, int, int]:
+        """Scan all text channels in a guild for emoji usage statistics"""
+        total_messages = 0
+        total_emojis = 0
+        channels_scanned = 0
+        
+        # Get all text channels that the bot can read
+        text_channels = [ch for ch in guild.channels if isinstance(ch, discord.TextChannel)]
+        text_channels = [ch for ch in text_channels if ch.permissions_for(guild.me).read_message_history]
+        
+        # If unlimited is True, set limit to None (no limit)
+        actual_limit = None if unlimited else limit_per_channel
+        
+        logger.info(f"Starting guild scan for {guild.name} ({guild.id}): {len(text_channels)} channels to scan, limit_per_channel={'unlimited' if unlimited else limit_per_channel}")
+        
+        for channel in text_channels:
+            try:
+                logger.debug(f"Scanning channel {channel.name} ({channel.id})")
+                messages, emojis = await self.scan_channel_history(channel, actual_limit)
+                total_messages += messages
+                total_emojis += emojis
+                channels_scanned += 1
+                
+                logger.debug(f"Channel {channel.name}: {messages} messages, {emojis} emojis")
+                
+            except Exception as e:
+                logger.exception(f"Error scanning channel {channel.name} ({channel.id}): {e}")
+                continue
+                
+        logger.info(f"Guild scan completed for {guild.name}: {channels_scanned} channels, {total_messages} messages, {total_emojis} emojis")
+        return total_messages, total_emojis, channels_scanned
 
     async def reply_when_mentioned(self, message: discord.Message) -> None:
         # cool feature for admins only
