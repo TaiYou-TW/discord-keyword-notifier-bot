@@ -32,6 +32,11 @@ DEFAULT_COOLDOWN = int(os.getenv("DEFAULT_COOLDOWN", "30"))
 NOTIFICATION_MAX_DESCRIPTION_LENGTH = int(
     os.getenv("NOTIFICATION_MAX_DESCRIPTION_LENGTH", "150")
 )
+ADMIN_USER_IDS = [
+    int(uid.strip())
+    for uid in os.getenv("ADMIN_USER_IDS", "").split(",")
+    if uid.strip()
+]
 MENTIONED_EMOJI = os.getenv("MENTIONED_EMOJI", "<:mcc_hoeh:1484208659658576143>")
 MENTIONED_EMOJI2 = os.getenv("MENTIONED_EMOJI2", "<:fww_hoeh:1484923834279788655>")
 

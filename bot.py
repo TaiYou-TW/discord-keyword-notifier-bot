@@ -3,7 +3,7 @@ import random
 import discord
 from discord import app_commands
 
-from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2
+from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2, ADMIN_USER_IDS
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
 from twitter_syndication import TwitterSyndicationMixin
@@ -150,6 +150,17 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         return result[0] if result else 0
 
     async def reply_when_mentioned(self, message: discord.Message) -> None:
+        # cool feature for admins only
+        if message.author in ADMIN_USER_IDS:
+            if message.mentions > 1:
+                for user in message.mentions:
+                    if user.id == self.user.id:
+                        continue
+                    await message.reply(
+                        f"{user.mention} {MENTIONED_EMOJI}", mention_author=False
+                    )
+                return
+
         # reply emoji2 10% of the time, emoji1 90% of the time
         if random.random() < 0.1:
             await message.reply(MENTIONED_EMOJI2)
