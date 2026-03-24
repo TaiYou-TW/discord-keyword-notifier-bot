@@ -208,14 +208,13 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
 
     uid = interaction.user.id
     conn = sqlite3.connect(bot.db_path)
-    
+
     if guild_stats:
         # Check if user is in a guild
         if not interaction.guild:
             try:
                 await interaction.followup.send(
-                    "❌ 此功能只能在伺服器中使用！", 
-                    ephemeral=True
+                    "❌ 此功能只能在伺服器中使用！", ephemeral=True
                 )
             except Exception as e:
                 logger.exception(
@@ -235,8 +234,7 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
             else:
                 try:
                     await interaction.followup.send(
-                        "❌ 無法獲取伺服器成員列表，請稍後再試！", 
-                        ephemeral=True
+                        "❌ 無法獲取伺服器成員列表，請稍後再試！", ephemeral=True
                     )
                 except Exception as e:
                     logger.exception(
@@ -248,7 +246,7 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
                 return
 
         # Get top 10 most used emojis across the entire guild
-        placeholders = ','.join('?' for _ in member_ids)
+        placeholders = ",".join("?" for _ in member_ids)
         res = conn.execute(
             f"""
             SELECT emoji, SUM(count) as total_count 
@@ -257,16 +255,15 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
             GROUP BY emoji 
             ORDER BY total_count DESC 
             LIMIT 10
-            """, 
-            tuple(member_ids)
+            """,
+            tuple(member_ids),
         )
         rows = res.fetchall()
-        
+
         if not rows:
             try:
                 await interaction.followup.send(
-                    "📊 這個伺服器還沒有表情符號使用記錄！", 
-                    ephemeral=True
+                    "📊 這個伺服器還沒有表情符號使用記錄！", ephemeral=True
                 )
             except Exception as e:
                 logger.exception(
@@ -281,12 +278,12 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
         embed = discord.Embed(
             title=f"📊 {interaction.guild.name} 表情符號使用排行榜",
             color=0x9B59B6,
-            timestamp=interaction.created_at
+            timestamp=interaction.created_at,
         )
 
         description = ""
         total_count = 0
-        
+
         for i, (emoji, count) in enumerate(rows, 1):
             description += f"{i}. {emoji} - {count} 次\n"
             total_count += count
@@ -310,16 +307,15 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
             WHERE user_id = ? 
             ORDER BY count DESC 
             LIMIT 10
-            """, 
-            (uid,)
+            """,
+            (uid,),
         )
         rows = res.fetchall()
-        
+
         if not rows:
             try:
                 await interaction.followup.send(
-                    "📊 你還沒有使用過任何表情符號！", 
-                    ephemeral=True
+                    "📊 你還沒有使用過任何表情符號！", ephemeral=True
                 )
             except Exception as e:
                 logger.exception(
@@ -334,12 +330,12 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
         embed = discord.Embed(
             title="📊 你的表情符號使用排行榜",
             color=0x3498DB,
-            timestamp=interaction.created_at
+            timestamp=interaction.created_at,
         )
 
         description = ""
         total_count = 0
-        
+
         for i, (emoji, count) in enumerate(rows, 1):
             description += f"{i}. {emoji} - {count} 次\n"
             total_count += count
@@ -372,8 +368,7 @@ async def clear_emoji_stats(interaction: discord.Interaction):
     if interaction.user.id not in ADMIN_USER_IDS:
         try:
             await interaction.response.send_message(
-                "❌ 此命令僅限管理員使用！", 
-                ephemeral=True
+                "❌ 此命令僅限管理員使用！", ephemeral=True
             )
         except Exception as e:
             logger.exception(
@@ -394,8 +389,7 @@ async def clear_emoji_stats(interaction: discord.Interaction):
 
         try:
             await interaction.followup.send(
-                "✅ 已清除所有表情符號統計資料！", 
-                ephemeral=True
+                "✅ 已清除所有表情符號統計資料！", ephemeral=True
             )
         except Exception as e:
             logger.exception(
@@ -420,8 +414,7 @@ async def clear_emoji_stats(interaction: discord.Interaction):
         )
         try:
             await interaction.followup.send(
-                f"⚠️ 清除資料時發生錯誤：{str(e)}", 
-                ephemeral=True
+                f"⚠️ 清除資料時發生錯誤：{str(e)}", ephemeral=True
             )
         except Exception as e2:
             logger.exception(
@@ -430,25 +423,27 @@ async def clear_emoji_stats(interaction: discord.Interaction):
                 interaction.user.id,
                 e2,
             )
+
+
+@bot.tree.command(name="scan_emoji_history", description="[管理員] 掃描歷史訊息中的表情符號使用情況")
 @app_commands.describe(
     channel="要掃描的頻道（若不指定且 scan_guild=False，則為當前頻道）",
     limit="每個頻道的掃描訊息數量上限（預設 1000，當 unlimited=True 時無效）",
     scan_guild="是否掃描整個伺服器（預設 False）",
-    unlimited="是否不限制訊息數量（僅對 scan_guild=True 有效，預設 False）"
+    unlimited="是否不限制訊息數量（僅對 scan_guild=True 有效，預設 False）",
 )
 async def scan_emoji_history(
-    interaction: discord.Interaction, 
-    channel: discord.TextChannel = None, 
+    interaction: discord.Interaction,
+    channel: discord.TextChannel = None,
     limit: int = 1000,
     scan_guild: bool = False,
-    unlimited: bool = False
+    unlimited: bool = False,
 ):
     # Check if user is admin
     if interaction.user.id not in ADMIN_USER_IDS:
         try:
             await interaction.response.send_message(
-                "❌ 此命令僅限管理員使用！", 
-                ephemeral=True
+                "❌ 此命令僅限管理員使用！", ephemeral=True
             )
         except Exception as e:
             logger.exception(
@@ -465,8 +460,7 @@ async def scan_emoji_history(
     if not unlimited and (limit <= 0 or limit > 10000):
         try:
             await interaction.followup.send(
-                "❌ 訊息數量限制必須在 1-10000 之間！", 
-                ephemeral=True
+                "❌ 訊息數量限制必須在 1-10000 之間！", ephemeral=True
             )
         except Exception as e:
             logger.exception(
@@ -483,8 +477,7 @@ async def scan_emoji_history(
             if not interaction.guild:
                 try:
                     await interaction.followup.send(
-                        "❌ 此命令只能在伺服器中使用！", 
-                        ephemeral=True
+                        "❌ 此命令只能在伺服器中使用！", ephemeral=True
                     )
                 except Exception as e:
                     logger.exception(
@@ -502,49 +495,51 @@ async def scan_emoji_history(
                     f"訊息數量：無限制（掃描所有歷史訊息）\n"
                     f"⚠️ 此操作可能需要較長時間，請耐心等待...\n"
                     f"請稍候...",
-                    ephemeral=True
+                    ephemeral=True,
                 )
             else:
                 progress_msg = await interaction.followup.send(
                     f"🔍 開始掃描伺服器 `{interaction.guild.name}` 的所有文字頻道...\n"
                     f"每個頻道訊息上限：{limit}\n"
                     f"請稍候...",
-                    ephemeral=True
+                    ephemeral=True,
                 )
 
             # Perform the guild scan
-            messages_scanned, emojis_found, channels_scanned = await bot.scan_guild_history(interaction.guild, limit, unlimited)
+            messages_scanned, emojis_found, channels_scanned = (
+                await bot.scan_guild_history(interaction.guild, limit, unlimited)
+            )
 
             # Update progress message with results
             embed = discord.Embed(
                 title="✅ 伺服器歷史訊息掃描完成",
                 color=0x2ECC71,
-                timestamp=interaction.created_at
+                timestamp=interaction.created_at,
             )
-            
+
             embed.add_field(
                 name="📊 掃描結果",
                 value=f"伺服器：{interaction.guild.name}\n"
-                      f"掃描頻道：{channels_scanned}\n"
-                      f"掃描訊息：{messages_scanned}\n"
-                      f"發現表情符號：{emojis_found}",
-                inline=False
+                f"掃描頻道：{channels_scanned}\n"
+                f"掃描訊息：{messages_scanned}\n"
+                f"發現表情符號：{emojis_found}",
+                inline=False,
             )
-            
+
             if messages_scanned > 0:
                 avg_emojis = emojis_found / messages_scanned
                 embed.add_field(
                     name="📈 統計資訊",
                     value=f"平均每訊息表情符號：{avg_emojis:.2f}",
-                    inline=True
+                    inline=True,
                 )
-            
+
             if channels_scanned > 0:
                 avg_channels = messages_scanned / channels_scanned
                 embed.add_field(
                     name="📈 頻道統計",
                     value=f"平均每頻道訊息：{avg_channels:.1f}",
-                    inline=True
+                    inline=True,
                 )
 
             await progress_msg.edit(content=None, embed=embed)
@@ -563,12 +558,11 @@ async def scan_emoji_history(
         else:
             # Scan single channel (existing logic)
             target_channel = channel or interaction.channel
-            
+
             if not isinstance(target_channel, discord.TextChannel):
                 try:
                     await interaction.followup.send(
-                        "❌ 只能掃描文字頻道！", 
-                        ephemeral=True
+                        "❌ 只能掃描文字頻道！", ephemeral=True
                     )
                 except Exception as e:
                     logger.exception(
@@ -584,33 +578,35 @@ async def scan_emoji_history(
                 f"🔍 開始掃描頻道 `{target_channel.name}` 的歷史訊息...\n"
                 f"目標訊息數量：{limit}\n"
                 f"請稍候...",
-                ephemeral=True
+                ephemeral=True,
             )
 
             # Perform the scan
-            messages_scanned, emojis_found = await bot.scan_channel_history(target_channel, limit)
+            messages_scanned, emojis_found = await bot.scan_channel_history(
+                target_channel, limit
+            )
 
             # Update progress message with results
             embed = discord.Embed(
                 title="✅ 頻道歷史訊息掃描完成",
                 color=0x2ECC71,
-                timestamp=interaction.created_at
+                timestamp=interaction.created_at,
             )
-            
+
             embed.add_field(
                 name="📊 掃描結果",
                 value=f"頻道：#{target_channel.name}\n"
-                      f"掃描訊息：{messages_scanned}\n"
-                      f"發現表情符號：{emojis_found}",
-                inline=False
+                f"掃描訊息：{messages_scanned}\n"
+                f"發現表情符號：{emojis_found}",
+                inline=False,
             )
-            
+
             if messages_scanned > 0:
                 avg_emojis = emojis_found / messages_scanned
                 embed.add_field(
                     name="📈 統計資訊",
                     value=f"平均每訊息表情符號：{avg_emojis:.2f}",
-                    inline=True
+                    inline=True,
                 )
 
             await progress_msg.edit(content=None, embed=embed)
@@ -634,8 +630,7 @@ async def scan_emoji_history(
         )
         try:
             await interaction.followup.send(
-                f"⚠️ 掃描過程中發生錯誤：{str(e)}", 
-                ephemeral=True
+                f"⚠️ 掃描過程中發生錯誤：{str(e)}", ephemeral=True
             )
         except Exception as e2:
             logger.exception(
@@ -644,5 +639,3 @@ async def scan_emoji_history(
                 interaction.user.id,
                 e2,
             )
-
-
