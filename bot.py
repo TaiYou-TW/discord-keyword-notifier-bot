@@ -1,5 +1,7 @@
 import sqlite3
 import random
+import asyncio
+from collections import Counter
 import discord
 from discord import app_commands
 
@@ -152,11 +154,10 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         conn.close()
         return result[0] if result else 0
 
-    async def record_emoji_usage(self, user_id: int, emoji: str) -> None:
-        """Record emoji usage for statistics"""
+    def _record_emoji_usage_sync(self, user_id: int, emoji: str) -> None:
+        """Synchronous helper for emoji usage update, safe inside executor."""
         import time
         current_time = int(time.time())
-        
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
@@ -166,10 +167,14 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
                 count = count + 1,
                 last_used = excluded.last_used
             """,
-            (user_id, emoji, current_time)
+            (user_id, emoji, current_time),
         )
         conn.commit()
         conn.close()
+
+    async def record_emoji_usage(self, user_id: int, emoji: str) -> None:
+        """Record emoji usage asynchronously via thread executor."""
+        await asyncio.to_thread(self._record_emoji_usage_sync, user_id, emoji)
 
     async def scan_channel_history(self, channel: discord.TextChannel, limit: int = 1000) -> tuple[int, int]:
         """Scan channel history for emoji usage statistics"""
@@ -185,22 +190,31 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         
         try:
             # If limit is None, use None to get all messages (no limit)
+            local_counter = Counter()
             async for message in channel.history(limit=limit):
                 if message.author.bot:
                     continue
-                    
+
                 messages_scanned += 1
-                
-                # Extract emojis from message content
+
                 custom_emojis = re.findall(custom_emoji_pattern, message.content)
                 unicode_emojis = re.findall(unicode_emoji_pattern, message.content)
-                all_emojis = custom_emojis + unicode_emojis
-                
-                # Record each emoji usage
-                for emoji in all_emojis:
-                    await self.record_emoji_usage(message.author.id, emoji)
+                for emoji in custom_emojis + unicode_emojis:
+                    local_counter[(message.author.id, emoji)] += 1
                     emojis_found += 1
-                    
+
+                # yield control to event loop regularly
+                if messages_scanned % 100 == 0:
+                    await asyncio.sleep(0)
+
+                # flush in batches to avoid huge memory usage
+                if len(local_counter) > 5000:
+                    await asyncio.to_thread(self._batch_record_emoji_usage_sync, local_counter)
+                    local_counter.clear()
+
+            if local_counter:
+                await asyncio.to_thread(self._batch_record_emoji_usage_sync, local_counter)
+
         except discord.Forbidden:
             logger.warning(f"Cannot access history for channel {channel.name} ({channel.id})")
         except Exception as e:
@@ -239,6 +253,28 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
                 
         logger.info(f"Guild scan completed for {guild.name}: {channels_scanned} channels, {total_messages} messages, {total_emojis} emojis")
         return total_messages, total_emojis, channels_scanned
+
+    def _batch_record_emoji_usage_sync(self, counter: Counter) -> None:
+        """Batch commit emoji counts to SQLite synchronously."""
+        import time
+        conn = sqlite3.connect(self.db_path)
+        now = int(time.time())
+
+        # one SQL statement per unique key for simplicity
+        for (user_id, emoji), delta in counter.items():
+            conn.execute(
+                """
+                INSERT INTO emoji_usage (user_id, emoji, count, last_used)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, emoji) DO UPDATE SET
+                    count = count + ?,
+                    last_used = ?
+                """,
+                (user_id, emoji, delta, now, delta, now),
+            )
+
+        conn.commit()
+        conn.close()
 
     async def reply_when_mentioned(self, message: discord.Message) -> None:
         # cool feature for admins only
