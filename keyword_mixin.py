@@ -12,6 +12,9 @@ from config import (
 
 
 class KeywordMixin:
+    def __init__(self):
+        self._processing_messages: set[int] = set()
+
     def is_user_still_cooldown(self, uid: int, kw: str) -> bool:
         user_cooldown = self.cooldown_settings.get(uid, DEFAULT_COOLDOWN)
         last_time = self.last_notified.get((uid, kw), 0)
@@ -178,37 +181,48 @@ class KeywordMixin:
         return False
 
     async def check_and_notify(self, message: discord.Message) -> None:
-        for uid, keywords in self.keyword_cache.items():
-            if message.author.id == uid:
-                continue
-
-            if not await self.is_user_in_same_guild(uid, message):
-                continue
-
-            for kw in keywords:
-                if not self.is_trigger_keyword(message, kw):
+        msg_id = message.id
+        
+        # Prevent race condition: if this message is already being processed, skip it
+        if msg_id in self._processing_messages:
+            logger.debug(f"Message {msg_id} is already being processed, skipping")
+            return
+        
+        self._processing_messages.add(msg_id)
+        try:
+            for uid, keywords in self.keyword_cache.items():
+                if message.author.id == uid:
                     continue
 
-                if self.is_user_still_cooldown(uid, kw):
+                if not await self.is_user_in_same_guild(uid, message):
                     continue
-
-                notification_key = f"{message.id}:{uid}:{kw}"
+                
+                notification_key = f"{message.id}:{uid}"
                 if notification_key in self.notified_message_keywords:
                     continue
 
-                try:
-                    await self.send_notification(uid, message, kw)
-                    self.update_last_notified(uid, kw)
-                    self.notified_message_keywords.add(notification_key)
-                    break
-                except Exception as e:
-                    logger.exception(
-                        "Exception occurred while notifying user %s: %s", uid, e
-                    )
+                for kw in keywords:
+                    if not self.is_trigger_keyword(message, kw):
+                        continue
 
-        if len(self.notified_message_keywords) > 5000:
-            for _ in range(1000):
-                self.notified_message_keywords.pop()
+                    if self.is_user_still_cooldown(uid, kw):
+                        continue
+
+                    try:
+                        await self.send_notification(uid, message, kw)
+                        self.update_last_notified(uid, kw)
+                        self.notified_message_keywords.add(notification_key)
+                        break
+                    except Exception as e:
+                        logger.exception(
+                            "Exception occurred while notifying user %s: %s", uid, e
+                        )
+
+            if len(self.notified_message_keywords) > 5000:
+                for _ in range(1000):
+                    self.notified_message_keywords.pop()
+        finally:
+            self._processing_messages.discard(msg_id)
 
     async def is_user_in_same_guild(self, uid: int, message: discord.Message) -> bool:
         if message.guild is None:
