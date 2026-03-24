@@ -12,8 +12,9 @@ from config import (
 
 
 class KeywordMixin:
-    def __init__(self):
+    def __init__(self, **kwargs):
         self._processing_messages: set[int] = set()
+        super().__init__(**kwargs)
 
     def is_user_still_cooldown(self, uid: int, kw: str) -> bool:
         user_cooldown = self.cooldown_settings.get(uid, DEFAULT_COOLDOWN)
