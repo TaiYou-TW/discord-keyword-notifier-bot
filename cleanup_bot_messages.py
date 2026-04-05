@@ -1,5 +1,4 @@
 import argparse
-import asyncio
 
 import discord
 
@@ -94,44 +93,49 @@ class CleanupClient(discord.Client):
 
         logger.info("Scanning channel %s (%s)", channel.name, channel.id)
 
-        deleted = 0
-        candidates = 0
-        async for message in channel.history(limit=self.history_limit):
+        if self.dry_run:
+            candidates = 0
+            async for message in channel.history(limit=self.history_limit):
+                if message.author.id != self.user.id:
+                    continue
+                candidates += 1
+                if self.max_delete is not None and candidates >= self.max_delete:
+                    break
+
+            logger.info(
+                "Channel %s done. candidates=%d deleted=0 dry_run=%s",
+                channel.id,
+                candidates,
+                self.dry_run,
+            )
+            return 0, candidates
+
+        matched_count = 0
+
+        def check(message: discord.Message) -> bool:
+            nonlocal matched_count
             if message.author.id != self.user.id:
-                continue
+                return False
+            if self.max_delete is not None and matched_count >= self.max_delete:
+                return False
 
-            candidates += 1
-            if self.max_delete is not None and candidates > self.max_delete:
-                break
+            matched_count += 1
+            return True
 
-            if self.dry_run:
-                continue
-
-            try:
-                await message.delete()
-                deleted += 1
-            except discord.NotFound:
-                continue
-            except discord.Forbidden:
-                logger.warning(
-                    "No permission to delete message %s in channel %s",
-                    message.id,
-                    channel.id,
-                )
-                continue
-            except discord.HTTPException as exc:
-                logger.warning(
-                    "Failed to delete message %s in channel %s: %s",
-                    message.id,
-                    channel.id,
-                    exc,
-                )
-                continue
-
-            if deleted % 20 == 0:
-                logger.info("Channel %s progress: deleted %d", channel.id, deleted)
-
-            await asyncio.sleep(0.2)
+        try:
+            deleted_messages = await channel.purge(
+                limit=self.history_limit,
+                check=check,
+                bulk=True,
+            )
+            deleted = len(deleted_messages)
+            candidates = matched_count
+        except discord.Forbidden:
+            logger.warning("No permission to purge channel %s", channel.id)
+            return 0, 0
+        except discord.HTTPException as exc:
+            logger.warning("Failed to purge channel %s: %s", channel.id, exc)
+            return 0, 0
 
         logger.info(
             "Channel %s done. candidates=%d deleted=%d dry_run=%s",
