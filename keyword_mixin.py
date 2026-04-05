@@ -1,4 +1,5 @@
 import re
+import sqlite3
 import time
 
 import discord
@@ -11,6 +12,107 @@ from config import (
 )
 
 
+class ChannelMuteView(discord.ui.View):
+    def __init__(
+        self,
+        channel_id: int,
+        channel_name: str,
+        guild_name: str,
+        jump_url: str,
+        muted: bool = False,
+        timeout: float = 86400,
+    ):
+        super().__init__(timeout=timeout)
+        self.channel_id = channel_id
+        self.channel_name = channel_name
+        self.guild_name = guild_name
+        self.jump_url = jump_url
+        self.muted = muted
+        self.add_item(
+            discord.ui.Button(
+                label="傳送門",
+                style=discord.ButtonStyle.link,
+                url=self.jump_url,
+                emoji="🔗",
+            )
+        )
+
+        if self.muted:
+            unmute_button = discord.ui.Button(
+                label="解除此頻道退訂",
+                style=discord.ButtonStyle.secondary,
+                emoji="🔔",
+            )
+
+            async def unmute_callback(interaction: discord.Interaction) -> None:
+                bot = interaction.client
+                if bot is None or not hasattr(bot, "unmute_channel_for_user"):
+                    await interaction.response.send_message(
+                        "目前無法處理這個操作。", ephemeral=True
+                    )
+                    return
+
+                if bot.unmute_channel_for_user(interaction.user.id, self.channel_id):
+                    await interaction.response.edit_message(
+                        view=ChannelMuteView(
+                            channel_id=self.channel_id,
+                            channel_name=self.channel_name,
+                            guild_name=self.guild_name,
+                            jump_url=self.jump_url,
+                            muted=False,
+                        )
+                    )
+                    await interaction.followup.send(
+                        f"✅ 已恢復訂閱：{self.guild_name}﹥＃{self.channel_name}",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"ℹ️ 這個頻道目前沒有被退訂：{self.guild_name}﹥＃{self.channel_name}",
+                        ephemeral=True,
+                    )
+
+            unmute_button.callback = unmute_callback
+            self.add_item(unmute_button)
+        else:
+            mute_button = discord.ui.Button(
+                label="取消訂閱此頻道",
+                style=discord.ButtonStyle.danger,
+                emoji="🔕",
+            )
+
+            async def mute_callback(interaction: discord.Interaction) -> None:
+                bot = interaction.client
+                if bot is None or not hasattr(bot, "mute_channel_for_user"):
+                    await interaction.response.send_message(
+                        "目前無法處理這個操作。", ephemeral=True
+                    )
+                    return
+
+                if bot.mute_channel_for_user(interaction.user.id, self.channel_id):
+                    await interaction.response.edit_message(
+                        view=ChannelMuteView(
+                            channel_id=self.channel_id,
+                            channel_name=self.channel_name,
+                            guild_name=self.guild_name,
+                            jump_url=self.jump_url,
+                            muted=True,
+                        )
+                    )
+                    await interaction.followup.send(
+                        f"✅ 已取消訂閱：{self.guild_name}﹥＃{self.channel_name}",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"ℹ️ 你已經取消訂閱過：{self.guild_name}﹥＃{self.channel_name}",
+                        ephemeral=True,
+                    )
+
+            mute_button.callback = mute_callback
+            self.add_item(mute_button)
+
+
 class KeywordMixin:
     def __init__(self, **kwargs):
         self._processing_messages: set[int] = set()
@@ -21,6 +123,56 @@ class KeywordMixin:
         last_time = self.last_notified.get((uid, kw), 0)
 
         return time.time() - last_time < user_cooldown
+
+    def load_muted_channels(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT user_id, channel_id FROM muted_channels"
+            ).fetchall()
+
+        for uid, channel_id in rows:
+            self.muted_channel_ids.setdefault(uid, set()).add(channel_id)
+
+        logger.info("Loaded muted channels for %d users.", len(self.muted_channel_ids))
+
+    def is_channel_muted(self, uid: int, channel_id: int) -> bool:
+        return channel_id in self.muted_channel_ids.get(uid, set())
+
+    def mute_channel_for_user(self, uid: int, channel_id: int) -> bool:
+        muted_channels = self.muted_channel_ids.setdefault(uid, set())
+        if channel_id in muted_channels:
+            return False
+
+        muted_channels.add(channel_id)
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO muted_channels (user_id, channel_id) VALUES (?, ?)",
+                    (uid, channel_id),
+                )
+        except Exception:
+            logger.exception("Failed to save muted channel for user %s", uid)
+
+        return True
+
+    def unmute_channel_for_user(self, uid: int, channel_id: int) -> bool:
+        muted_channels = self.muted_channel_ids.get(uid)
+        if muted_channels is None or channel_id not in muted_channels:
+            return False
+
+        muted_channels.remove(channel_id)
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "DELETE FROM muted_channels WHERE user_id = ? AND channel_id = ?",
+                    (uid, channel_id),
+                )
+        except Exception:
+            logger.exception("Failed to remove muted channel for user %s", uid)
+
+        return True
 
     async def send_notification(
         self, uid: int, message: discord.Message, kw: str
@@ -91,16 +243,18 @@ class KeywordMixin:
         if not image_urls and author_icon_url:
             embed.set_thumbnail(url=author_icon_url)
 
-        embed.add_field(
-            name=ZERO_WIDTH_SPACE,
-            value=f"[傳送門]({message.jump_url})",
-            inline=False,
-        )
-
         if image_urls:
             embed.set_image(url=image_urls[0])
 
         embed.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
+
+        view = ChannelMuteView(
+            channel_id=message.channel.id,
+            channel_name=channel_name,
+            guild_name=server_name,
+            jump_url=message.jump_url,
+            muted=self.is_channel_muted(uid, message.channel.id),
+        )
 
         extra_embeds: list[discord.Embed] = []
         for extra_url in image_urls[1:]:
@@ -112,9 +266,9 @@ class KeywordMixin:
 
         try:
             if extra_embeds:
-                await target_user.send(embeds=[embed, *extra_embeds])
+                await target_user.send(embeds=[embed, *extra_embeds], view=view)
             else:
-                await target_user.send(embed=embed)
+                await target_user.send(embed=embed, view=view)
         except discord.Forbidden:
             logger.warning(
                 "Failed to send notification to %s(%d): Forbidden", target_user, uid
@@ -183,12 +337,12 @@ class KeywordMixin:
 
     async def check_and_notify(self, message: discord.Message) -> None:
         msg_id = message.id
-        
+
         # Prevent race condition: if this message is already being processed, skip it
         if msg_id in self._processing_messages:
             logger.debug(f"Message {msg_id} is already being processed, skipping")
             return
-        
+
         self._processing_messages.add(msg_id)
         try:
             for uid, keywords in self.keyword_cache.items():
@@ -197,7 +351,10 @@ class KeywordMixin:
 
                 if not await self.is_user_in_same_guild(uid, message):
                     continue
-                
+
+                if message.guild and self.is_channel_muted(uid, message.channel.id):
+                    continue
+
                 notification_key = f"{message.id}:{uid}"
                 if notification_key in self.notified_message_keywords:
                     continue
