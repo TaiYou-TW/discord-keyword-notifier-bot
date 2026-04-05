@@ -62,6 +62,189 @@ class HolodexMixin:
 
         return True
 
+    def load_holodex_status_messages(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT source_key, stream_id, notify_type, channel_id, message_id FROM holodex_status_messages"
+            ).fetchall()
+
+        for source_key, stream_id, notify_type, channel_id, message_id in rows:
+            try:
+                enum_type = HolodexNotifyType(notify_type)
+            except ValueError:
+                logger.warning(
+                    "Unknown Holodex status notify_type in DB: %s", notify_type
+                )
+                continue
+
+            self.holodex_status_messages.setdefault(enum_type, {}).setdefault(
+                source_key, {}
+            )[stream_id] = {
+                "source_key": source_key,
+                "stream_id": stream_id,
+                "notify_type": enum_type,
+                "channel_id": channel_id,
+                "message_id": message_id,
+            }
+
+        logger.info(
+            "Loaded Holodex status messages: %d live, %d upcoming",
+            sum(
+                len(v)
+                for v in self.holodex_status_messages[HolodexNotifyType.LIVE].values()
+            ),
+            sum(
+                len(v)
+                for v in self.holodex_status_messages[
+                    HolodexNotifyType.UPCOMING
+                ].values()
+            ),
+        )
+
+    def get_holodex_status_record(
+        self, source_key: str, stream_id: str, notify_type: HolodexNotifyType
+    ) -> dict | None:
+        return (
+            self.holodex_status_messages.get(notify_type, {})
+            .get(source_key, {})
+            .get(stream_id)
+        )
+
+    def store_holodex_status_record(
+        self,
+        source_key: str,
+        stream_id: str,
+        notify_type: HolodexNotifyType,
+        channel_id: int,
+        message_id: int,
+    ) -> None:
+        record = {
+            "source_key": source_key,
+            "stream_id": stream_id,
+            "notify_type": notify_type,
+            "channel_id": channel_id,
+            "message_id": message_id,
+        }
+        self.holodex_status_messages.setdefault(notify_type, {}).setdefault(
+            source_key, {}
+        )[stream_id] = record
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO holodex_status_messages (source_key, stream_id, notify_type, channel_id, message_id) VALUES (?, ?, ?, ?, ?)",
+                    (source_key, stream_id, notify_type.value, channel_id, message_id),
+                )
+        except Exception as e:
+            logger.exception("Failed to save Holodex status record: %s", e)
+
+    def remove_holodex_status_record(
+        self, source_key: str, stream_id: str, notify_type: HolodexNotifyType
+    ) -> None:
+        source_cache = self.holodex_status_messages.get(notify_type, {}).get(source_key)
+        if source_cache is not None:
+            source_cache.pop(stream_id, None)
+            if not source_cache:
+                self.holodex_status_messages[notify_type].pop(source_key, None)
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "DELETE FROM holodex_status_messages WHERE source_key = ? AND stream_id = ? AND notify_type = ?",
+                    (source_key, stream_id, notify_type.value),
+                )
+        except Exception as e:
+            logger.exception("Failed to remove Holodex status record: %s", e)
+
+    async def delete_holodex_status_message(self, record: dict) -> None:
+        channel_id = record.get("channel_id")
+        message_id = record.get("message_id")
+
+        if channel_id is not None and message_id is not None:
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(channel_id)
+                except Exception:
+                    channel = None
+
+            if channel is not None:
+                try:
+                    message = await channel.fetch_message(message_id)
+                    await message.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+                except Exception:
+                    logger.exception(
+                        "Failed to delete Holodex status message %s in channel %s",
+                        message_id,
+                        channel_id,
+                    )
+
+        self.remove_holodex_status_record(
+            record["source_key"], record["stream_id"], record["notify_type"]
+        )
+
+    async def ensure_holodex_status_message(
+        self,
+        source_key: str,
+        stream: dict,
+        notify_type: HolodexNotifyType,
+        notify_channel_id: int | None,
+    ) -> None:
+        stream_id = stream.get("id")
+        if not stream_id:
+            return
+
+        existing_record = self.get_holodex_status_record(
+            source_key, stream_id, notify_type
+        )
+        if existing_record:
+            channel_id = existing_record.get("channel_id")
+            message_id = existing_record.get("message_id")
+            if channel_id is not None and message_id is not None:
+                channel = self.get_channel(channel_id)
+                if channel is not None:
+                    try:
+                        await channel.fetch_message(message_id)
+                        return
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        await self.delete_holodex_status_message(existing_record)
+                else:
+                    await self.delete_holodex_status_message(existing_record)
+            else:
+                await self.delete_holodex_status_message(existing_record)
+
+        if not notify_channel_id:
+            return
+
+        sent_message = await self.send_holodex_status_notification(
+            stream, notify_channel_id, notify_type
+        )
+        if sent_message is not None:
+            self.store_holodex_status_record(
+                source_key,
+                stream_id,
+                notify_type,
+                sent_message.channel.id,
+                sent_message.id,
+            )
+
+    async def cleanup_holodex_status_messages(
+        self,
+        source_key: str,
+        notify_type: HolodexNotifyType,
+        current_stream_ids: set[str],
+    ) -> None:
+        source_cache = self.holodex_status_messages.get(notify_type, {}).get(source_key)
+        if not source_cache:
+            return
+
+        for stream_id, record in list(source_cache.items()):
+            if stream_id in current_stream_ids:
+                continue
+            await self.delete_holodex_status_message(record)
+
     @staticmethod
     def is_holodex_plain_video(video: dict) -> bool:
         # For Holodex live_info payloads, plain videos usually have live_viewers = null.
@@ -121,7 +304,7 @@ class HolodexMixin:
     async def holodex_live_monitor(self) -> None:
         async with aiohttp.ClientSession() as session:
             while True:
-                logger.info("Checking Holodex...")
+                logger.debug("Checking Holodex...")
                 try:
                     await self.holodex_check_live(session)
                 except Exception:
@@ -158,60 +341,51 @@ class HolodexMixin:
                 continue
 
             source_key = f"org:{source}" if is_org else f"cid:{source}"
+            live_streams: list[dict] = []
+            upcoming_streams: list[dict] = []
             if isinstance(data, list) and data:
                 for stream in data:
                     stream_id = stream.get("id")
                     status = (stream.get("status") or "").lower()
-                    stream_channel_id = stream.get("channel", {}).get(
-                        "id"
-                    ) or stream.get("channel_id")
-                    dedupe_key = (
-                        f"cid:{stream_channel_id}" if stream_channel_id else source_key
-                    )
 
                     if not stream_id:
                         logger.warning("Holodex stream missing id: %s", stream)
                         continue
 
                     if status == "live":
-                        if self.remember_holodex_notified_id(
-                            self.holodex_notified_live,
-                            dedupe_key,
-                            stream_id,
-                            HolodexNotifyType.LIVE,
-                        ):
-                            logger.info(
-                                "Detected new live stream for source %s: %s",
-                                source,
-                                stream_id,
-                            )
-                            if HOLODEX_NOTIFY_LIVE_CHANNEL_ID:
-                                await self.send_holodex_status_notification(
-                                    stream,
-                                    HOLODEX_NOTIFY_LIVE_CHANNEL_ID,
-                                    HolodexNotifyType.LIVE.value,
-                                )
-                        continue
+                        live_streams.append(stream)
+                    elif status == "upcoming":
+                        upcoming_streams.append(stream)
 
-                    if status == "upcoming":
-                        if self.remember_holodex_notified_id(
-                            self.holodex_notified_upcoming,
-                            dedupe_key,
-                            stream_id,
-                            HolodexNotifyType.UPCOMING,
-                        ):
-                            logger.info(
-                                "Detected new upcoming stream for source %s: %s",
-                                source,
-                                stream_id,
-                            )
-                            if HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID:
-                                await self.send_holodex_status_notification(
-                                    stream,
-                                    HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID,
-                                    HolodexNotifyType.UPCOMING.value,
-                                )
-                        continue
+            live_stream_ids = {
+                str(stream.get("id")) for stream in live_streams if stream.get("id")
+            }
+            upcoming_stream_ids = {
+                str(stream.get("id")) for stream in upcoming_streams if stream.get("id")
+            }
+
+            for stream in live_streams:
+                await self.ensure_holodex_status_message(
+                    source_key,
+                    stream,
+                    HolodexNotifyType.LIVE,
+                    HOLODEX_NOTIFY_LIVE_CHANNEL_ID,
+                )
+
+            for stream in upcoming_streams:
+                await self.ensure_holodex_status_message(
+                    source_key,
+                    stream,
+                    HolodexNotifyType.UPCOMING,
+                    HOLODEX_NOTIFY_UPCOMING_CHANNEL_ID,
+                )
+
+            await self.cleanup_holodex_status_messages(
+                source_key, HolodexNotifyType.LIVE, live_stream_ids
+            )
+            await self.cleanup_holodex_status_messages(
+                source_key, HolodexNotifyType.UPCOMING, upcoming_stream_ids
+            )
 
             # 2) Check latest uploads (limit 5 to handle multiple new videos)
             if is_org:
@@ -271,8 +445,11 @@ class HolodexMixin:
                         )
 
     async def send_holodex_status_notification(
-        self, stream: dict, notify_channel_id: int, stream_type: str
-    ) -> None:
+        self,
+        stream: dict,
+        notify_channel_id: int,
+        stream_type: HolodexNotifyType | str,
+    ) -> discord.Message | None:
         if not notify_channel_id:
             return
 
@@ -291,21 +468,27 @@ class HolodexMixin:
         if not stream_url and stream_id:
             stream_url = f"https://www.youtube.com/watch?v={stream_id}"
 
-        if stream_type == "upcoming":
+        stream_type_value = (
+            stream_type.value
+            if isinstance(stream_type, HolodexNotifyType)
+            else stream_type
+        )
+
+        if stream_type_value == "upcoming":
             stream_time_raw = (
                 stream.get("start_scheduled")
                 or stream.get("available_at")
                 or stream.get("published_at")
             )
-        elif stream_type == "live":
+        elif stream_type_value == "live":
             stream_time_raw = stream.get("start_actual") or stream.get("published_at")
         else:
             stream_time_raw = stream.get("published_at") or stream.get("available_at")
 
-        if stream_type == "live":
+        if stream_type_value == "live":
             title = f"🔴 直播開始：{stream_title or ''}"
             color = 0xE74C3C
-        elif stream_type == "upcoming":
+        elif stream_type_value == "upcoming":
             title = f"⏰ 即將直播：{stream_title or ''}"
             color = 0xF1C40F
         else:
@@ -357,7 +540,7 @@ class HolodexMixin:
         if stream_url:
             embed.add_field(name="傳送門", value=stream_url, inline=False)
 
-        if stream_type == "upcoming" and parsed_stream_time is not None:
+        if stream_type_value == "upcoming" and parsed_stream_time is not None:
             start_ts = int(parsed_stream_time.timestamp())
             embed.add_field(
                 name="開播時間",
@@ -366,11 +549,12 @@ class HolodexMixin:
             )
 
         try:
-            await channel.send(embed=embed)
+            return await channel.send(embed=embed)
         except Exception:
             logger.exception(
                 "Failed to send Holodex %s notification message", stream_type
             )
+            return None
 
     def has_send_embed_permissions(self, channel: discord.TextChannel) -> bool:
         permissions = channel.permissions_for(channel.guild.me)

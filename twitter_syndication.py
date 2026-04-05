@@ -226,7 +226,7 @@ class TwitterSyndicationMixin:
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
 
-        logger.info(
+        logger.debug(
             "Worker %d checking %d profiles",
             worker_index,
             len(profiles),
