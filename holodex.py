@@ -21,6 +21,19 @@ from config import (
 from enums import HolodexNotifyType
 
 
+class HolodexLinkView(discord.ui.View):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="傳送門",
+                style=discord.ButtonStyle.link,
+                url=url,
+                emoji="🔗",
+            )
+        )
+
+
 class HolodexMixin:
     db_path = DB_PATH
 
@@ -498,10 +511,9 @@ class HolodexMixin:
         desc_text = stream.get("description") or ""
         embed_description = ""
         if desc_text:
-            short_desc = desc_text[:NOTIFICATION_MAX_DESCRIPTION_LENGTH] + (
+            embed_description = desc_text[:NOTIFICATION_MAX_DESCRIPTION_LENGTH] + (
                 "..." if len(desc_text) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ""
             )
-            embed_description = "> " + "\n> ".join(short_desc.splitlines())
 
         embed = discord.Embed(
             title=title,
@@ -537,8 +549,7 @@ class HolodexMixin:
         if channel_icon:
             embed.set_thumbnail(url=channel_icon)
 
-        if stream_url:
-            embed.add_field(name="傳送門", value=stream_url, inline=False)
+        view = HolodexLinkView(stream_url) if stream_url else None
 
         if stream_type_value == "upcoming" and parsed_stream_time is not None:
             start_ts = int(parsed_stream_time.timestamp())
@@ -549,7 +560,7 @@ class HolodexMixin:
             )
 
         try:
-            return await channel.send(embed=embed)
+            return await channel.send(embed=embed, view=view)
         except Exception:
             logger.exception(
                 "Failed to send Holodex %s notification message", stream_type
