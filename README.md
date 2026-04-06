@@ -24,6 +24,7 @@ docker compose up --build
 - `/emoji_stats [guild_stats]`：查看表情符號使用統計
 - `/scan_emoji_history [channel] [limit] [scan_guild] [unlimited]`：掃描歷史訊息統計表情符號使用（管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
+- YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
 ## 🧹 一次性清理 Bot 訊息
 
@@ -71,6 +72,21 @@ python cleanup_bot_messages.py 123456789012345678 --limit 2000 --max-delete 500
 Twitter 請求 endpoint：
 
 `https://syndication.twitter.com/srv/timeline-profile/screen-name/{screen_name}`
+
+### YouTube 社群貼文監控
+
+| 變數                   | 說明                                            | 預設   |
+| ---------------------- | ----------------------------------------------- | ------ |
+| `YT_CHANNEL_IDS`       | 要監控的來源（Channel ID 或 @handle，逗號分隔） | 空     |
+| `YT_NOTIFY_CHANNEL_ID` | 要推播到的 Discord 頻道 ID                      | 空     |
+| `YT_POLL_INTERVAL`     | 輪詢間隔（秒）                                  | `60`   |
+| `YT_MEMORY_LIMIT`      | 每個頻道 dedupe 記憶上限                        | `2000` |
+
+範例 endpoint：
+
+`{YT_API_BASE_URL}/channels?part=community&id={channel_id}`
+
+`{YT_API_BASE_URL}/channels?part=community&handle=@SakuraMiko`
 
 ## 😊 表情符號統計功能
 

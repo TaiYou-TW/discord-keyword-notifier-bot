@@ -1,0 +1,3 @@
+[submodule "YouTube-operational-API"]
+	path = YouTube-operational-API
+	url = https://github.com/Benjamin-Loison/YouTube-operational-API.git

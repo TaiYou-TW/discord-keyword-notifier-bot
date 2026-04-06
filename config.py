@@ -82,4 +82,13 @@ TWITTER_SYNDICATION_USER_AGENT = [
     "Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)",
 ]
 
+YT_API_BASE_URL = os.getenv("YT_API_BASE_URL", "http://127.0.0.1:8080")
+YT_CHANNEL_IDS = [
+    c.strip() for c in os.getenv("YT_CHANNEL_IDS", "").split(",") if c.strip()
+]
+YT_NOTIFY_CHANNEL_ID = os.getenv("YT_NOTIFY_CHANNEL_ID")
+YT_NOTIFY_CHANNEL_ID = int(YT_NOTIFY_CHANNEL_ID) if YT_NOTIFY_CHANNEL_ID else None
+YT_POLL_INTERVAL = int(os.getenv("YT_POLL_INTERVAL", "60"))
+YT_MEMORY_LIMIT = int(os.getenv("YT_MEMORY_LIMIT", "2000"))
+
 ZERO_WIDTH_SPACE = "\u200b"

@@ -9,10 +9,17 @@ from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2, ADMIN_USE
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
 from twitter_syndication import TwitterSyndicationMixin
+from youtube_community import YouTubeCommunityMixin
 from enums import HolodexNotifyType
 
 
-class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client):
+class MyBot(
+    YouTubeCommunityMixin,
+    TwitterSyndicationMixin,
+    HolodexMixin,
+    KeywordMixin,
+    discord.Client,
+):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -36,6 +43,8 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         }
         self.twitter_profile_notified = {}
         self.twitter_monitor_task = None
+        self.yt_community_notified = {}
+        self.yt_community_monitor_task = None
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
         self.muted_channel_ids = {}  # { user_id: set(channel_id) }
 
@@ -64,6 +73,9 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
             "CREATE TABLE IF NOT EXISTS twitter_profile_notified (screen_name TEXT, tweet_id TEXT, PRIMARY KEY (screen_name, tweet_id))"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS yt_community_notified (source_key TEXT, post_id TEXT, PRIMARY KEY (source_key, post_id))"
+        )
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS emoji_usage (user_id INTEGER, emoji TEXT, count INTEGER DEFAULT 1, last_used INTEGER, PRIMARY KEY (user_id, emoji))"
         )
         conn.execute(
@@ -78,6 +90,7 @@ class MyBot(TwitterSyndicationMixin, HolodexMixin, KeywordMixin, discord.Client)
         self.load_holodex_status_messages()
         self.load_muted_channels()
         self.load_twitter_profile_data()
+        self.load_youtube_community_data()
 
         await self.tree.sync()
 

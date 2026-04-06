@@ -1,8 +1,19 @@
 services:
+  youtube-operational-api:
+    build:
+      context: ./YouTube-operational-API
+    restart: on-failure
+    ports:
+      - ${YT_API_EXPOSED_HTTP_PORT:-8080}:80
+
   keyword-notifier:
     build: .
+    depends_on:
+      - youtube-operational-api
     env_file:
       - .env
+    environment:
+      YT_API_BASE_URL: http://youtube-operational-api
     volumes:
       - .:/app
     restart: unless-stopped

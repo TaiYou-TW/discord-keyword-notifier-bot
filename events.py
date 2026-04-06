@@ -9,6 +9,9 @@ from config import (
     TWITTER_NOTIFY_CHANNEL_ID,
     TWITTER_POLL_INTERVAL,
     TWITTER_SCREEN_NAMES,
+    YT_CHANNEL_IDS,
+    YT_NOTIFY_CHANNEL_ID,
+    YT_POLL_INTERVAL,
     logger,
 )
 
@@ -37,7 +40,23 @@ async def on_ready():
             TWITTER_POLL_INTERVAL,
         )
         if bot.twitter_monitor_task is None or bot.twitter_monitor_task.done():
-            bot.twitter_monitor_task = bot.loop.create_task(bot.twitter_profile_monitor())
+            bot.twitter_monitor_task = bot.loop.create_task(
+                bot.twitter_profile_monitor()
+            )
+
+    if YT_CHANNEL_IDS and YT_NOTIFY_CHANNEL_ID:
+        logger.info(
+            "Starting YT community monitor for channels: %s (interval %ds)",
+            YT_CHANNEL_IDS,
+            YT_POLL_INTERVAL,
+        )
+        if (
+            bot.yt_community_monitor_task is None
+            or bot.yt_community_monitor_task.done()
+        ):
+            bot.yt_community_monitor_task = bot.loop.create_task(
+                bot.youtube_community_monitor()
+            )
 
 
 @bot.event
