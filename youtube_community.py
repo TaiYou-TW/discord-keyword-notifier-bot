@@ -192,8 +192,8 @@ class YouTubeCommunityMixin:
                     continue
 
                 # Warm up cache on first fetch to avoid flooding historical posts.
-                # if not had_cache_before:
-                #     continue
+                if not had_cache_before:
+                    continue
 
                 logger.info("Detected new YT community post: %s (%s)", post_id, source)
                 await self.send_youtube_community_notification(
