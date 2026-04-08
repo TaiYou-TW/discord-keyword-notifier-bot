@@ -89,17 +89,11 @@ async def on_message(message):
         await bot.reply_when_mentioned(message)
         return
 
-    if message.author == bot.user:
-        return
-
     await bot.check_and_notify(message)
 
 
 @bot.event
 async def on_message_edit(before, after):
-    if after.author == bot.user:
-        return
-
     if len(before.embeds) == 0 and len(after.embeds) > 0:
         logger.debug(f"偵測到訊息產生預覽 Embed: {after.id}")
         await bot.check_and_notify(after)
