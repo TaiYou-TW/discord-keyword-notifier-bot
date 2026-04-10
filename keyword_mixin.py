@@ -186,7 +186,7 @@ class KeywordMixin:
                 if (
                     attachment.content_type
                     and attachment.content_type.startswith("image/")
-                    and not attachment.spoiler
+                    and not attachment.is_spoiler()
                 ):
                     image_urls.append(attachment.url)
         if message.embeds:
