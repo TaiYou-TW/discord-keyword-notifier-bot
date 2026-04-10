@@ -179,11 +179,14 @@ class KeywordMixin:
     ) -> None:
         target_user = await self.fetch_user(uid)
 
+        # Check if original message has spoiler images, ignore them
         image_urls: list[str] = []
         if message.attachments:
             for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith(
-                    "image/"
+                if (
+                    attachment.content_type
+                    and attachment.content_type.startswith("image/")
+                    and not attachment.spoiler
                 ):
                     image_urls.append(attachment.url)
         if message.embeds:
