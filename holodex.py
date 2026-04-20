@@ -320,9 +320,9 @@ class HolodexMixin:
                 logger.debug("Checking Holodex...")
                 try:
                     await self.holodex_check_live(session)
+                    await asyncio.sleep(HOLODEX_POLL_INTERVAL)
                 except Exception:
                     logger.exception("Holodex live monitor error")
-                await asyncio.sleep(HOLODEX_POLL_INTERVAL)
 
     async def holodex_check_live(self, session: aiohttp.ClientSession) -> None:
         if not HOLODEX_ORG and not HOLODEX_CHANNEL_IDS:
@@ -349,6 +349,12 @@ class HolodexMixin:
                         )
                         continue
                     data = await resp.json()
+            except TimeoutError:
+                logger.warning(
+                    "Holodex API timed out for source %s",
+                    source,
+                )
+                continue
             except Exception:
                 logger.exception("Failed to query Holodex for source %s", source)
                 continue
@@ -416,6 +422,12 @@ class HolodexMixin:
                         )
                         continue
                     upload_data = await resp.json()
+            except TimeoutError:
+                logger.warning(
+                    "Holodex upload API timed out for source %s",
+                    source,
+                )
+                continue
             except Exception:
                 logger.exception(
                     "Failed to query Holodex uploads for source %s", source
@@ -561,6 +573,12 @@ class HolodexMixin:
 
         try:
             return await channel.send(embed=embed, view=view)
+        except TimeoutError:
+            logger.warning(
+                "Timed out sending Holodex %s notification message",
+                stream_type,
+            )
+            return None
         except Exception:
             logger.exception(
                 "Failed to send Holodex %s notification message", stream_type

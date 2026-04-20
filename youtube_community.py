@@ -120,10 +120,9 @@ class YouTubeCommunityMixin:
             while True:
                 try:
                     await self.youtube_community_check(session)
+                    await asyncio.sleep(YT_POLL_INTERVAL)
                 except Exception:
                     logger.exception("YouTube community monitor error")
-
-                await asyncio.sleep(YT_POLL_INTERVAL)
 
     async def youtube_community_check(self, session: aiohttp.ClientSession) -> None:
         base_url = YT_API_BASE_URL.rstrip("/")
@@ -159,6 +158,12 @@ class YouTubeCommunityMixin:
                         )
                         continue
                     payload = await resp.json()
+            except TimeoutError:
+                logger.warning(
+                    "YT community API timed out for source %s",
+                    source,
+                )
+                continue
             except Exception:
                 logger.exception(
                     "Failed to query YT community API for source %s",
@@ -306,5 +311,10 @@ class YouTubeCommunityMixin:
 
         try:
             await channel.send(embed=embed, view=view)
+        except TimeoutError:
+            logger.warning(
+                "Timed out sending YT community notification for post %s",
+                post_id,
+            )
         except Exception:
             logger.exception("Failed to send YT community notification")
