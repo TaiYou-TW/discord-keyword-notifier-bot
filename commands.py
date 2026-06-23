@@ -335,9 +335,15 @@ async def emoji_rank(
             )
         return
 
+    if len(member_ids) > 998:
+        await interaction.followup.send(
+            "❌ 伺服器成員數量過多，無法產生排行榜（SQLite 參數上限）。",
+            ephemeral=True,
+        )
+        return
+
     placeholders = ",".join("?" for _ in member_ids)
     conn = sqlite3.connect(bot.db_path)
-
     if by_user:
         rows = conn.execute(
             f"""
