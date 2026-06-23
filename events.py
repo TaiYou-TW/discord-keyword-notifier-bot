@@ -86,8 +86,7 @@ async def on_member_remove(member):
 @bot.event
 async def on_message(message):
     # Record emoji usage for every message, regardless of the branches below.
-    await bot.record_message_emojis(message)
-
+    bot.loop.create_task(bot.record_message_emojis(message))
     if bot.user in message.mentions:
         await bot.reply_when_mentioned(message)
         return
