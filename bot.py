@@ -1,9 +1,11 @@
 import sqlite3
 import random
 import asyncio
+import re
 from collections import Counter
 import discord
 from discord import app_commands
+import emoji
 
 from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2, ADMIN_USER_IDS
 from holodex import HolodexMixin
@@ -11,6 +13,19 @@ from keyword_mixin import KeywordMixin
 from twitter_syndication import TwitterSyndicationMixin
 from youtube_community import YouTubeCommunityMixin
 from enums import HolodexNotifyType
+
+
+# Match Discord custom emojis (both static and animated): <:name:id> / <a:name:id>
+CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:\w+:\d+>")
+
+
+def extract_emojis(text: str) -> list[str]:
+    """Return every emoji in ``text`` (custom Discord + Unicode), preserving repeats."""
+    if not text:
+        return []
+    found = CUSTOM_EMOJI_PATTERN.findall(text)
+    found.extend(item["emoji"] for item in emoji.emoji_list(text))
+    return found
 
 
 class MyBot(
@@ -201,22 +216,39 @@ class MyBot(
         conn.close()
 
     async def record_emoji_usage(self, user_id: int, emoji: str) -> None:
-        """Record emoji usage asynchronously via thread executor."""
-        await asyncio.to_thread(self._record_emoji_usage_sync, user_id, emoji)
+        """Record a single emoji use asynchronously via thread executor.
+
+        Used for reactions. Errors are logged and swallowed so a DB hiccup
+        never bubbles up into the event handler that called it.
+        """
+        try:
+            await asyncio.to_thread(self._record_emoji_usage_sync, user_id, emoji)
+        except Exception:
+            logger.exception("Failed to record emoji usage for user %d", user_id)
+
+    async def record_message_emojis(self, message: discord.Message) -> None:
+        """Record every emoji contained in a message's content for its author."""
+        if message.author.bot:
+            return
+        emojis = extract_emojis(message.content)
+        if not emojis:
+            return
+        counter = Counter((message.author.id, e) for e in emojis)
+        try:
+            await asyncio.to_thread(self._batch_record_emoji_usage_sync, counter)
+        except Exception:
+            logger.exception(
+                "Failed to record message emojis for user %d (message %d)",
+                message.author.id,
+                message.id,
+            )
 
     async def scan_channel_history(
         self, channel: discord.TextChannel, limit: int = 1000
     ) -> tuple[int, int]:
         """Scan channel history for emoji usage statistics"""
-        import re
-
         messages_scanned = 0
         emojis_found = 0
-
-        # Match Discord custom emojis (both static and animated)
-        custom_emoji_pattern = r"<a?:\w+:\d+>"
-        # For Unicode emojis
-        unicode_emoji_pattern = r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002500-\U00002BEF\U00002702-\U000027B0\U00002702-\U000027B0\U000024C2-\U0001F251\U0001f926-\U0001f937\U00010000-\U0010ffff\U0001f1e6-\U0001f1ff]"
 
         try:
             # If limit is None, use None to get all messages (no limit)
@@ -227,10 +259,8 @@ class MyBot(
 
                 messages_scanned += 1
 
-                custom_emojis = re.findall(custom_emoji_pattern, message.content)
-                unicode_emojis = re.findall(unicode_emoji_pattern, message.content)
-                for emoji in custom_emojis + unicode_emojis:
-                    local_counter[(message.author.id, emoji)] += 1
+                for found in extract_emojis(message.content):
+                    local_counter[(message.author.id, found)] += 1
                     emojis_found += 1
 
                 # yield control to event loop regularly

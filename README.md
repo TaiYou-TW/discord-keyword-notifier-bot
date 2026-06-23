@@ -21,7 +21,8 @@ docker compose up --build
 - `/notify_remove <keyword>`：取消訂閱
 - `/notify_list`：查看已訂閱的關鍵字
 - `/notify_cooldown <seconds>`：設定同一關鍵字通知冷卻時間
-- `/emoji_stats [guild_stats]`：查看表情符號使用統計
+- `/emoji_stats`：查看自己最常使用的表情符號與次數
+- `/emoji_rank [top] [by_user]`：查看伺服器表情符號使用排行榜（管理員專用）
 - `/scan_emoji_history [channel] [limit] [scan_guild] [unlimited]`：掃描歷史訊息統計表情符號使用（管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
@@ -90,14 +91,15 @@ Twitter 請求 endpoint：
 
 ## 😊 表情符號統計功能
 
-Bot 會在管理員執行掃描命令時統計表情符號使用情況，提供詳細的統計資訊。
+Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情符號使用情況，並提供詳細的統計資訊。管理員也可使用掃描命令補錄歷史訊息。
 
 ### 指令說明
 
-- `/emoji_stats [guild_stats=False]`：查看個人或伺服器表情符號使用統計
-    - `guild_stats=False`：查看個人統計
-    - `guild_stats=True`：查看整個伺服器的統計（管理員專用）
-    - **注意**：統計資料來自管理員的掃描結果，不包含即時記錄
+- `/emoji_stats`：查看自己最常使用的表情符號排行榜（前 10 名）與總次數，並標示最愛的表情符號
+- `/emoji_rank [top=10] [by_user=False]`：查看伺服器表情符號使用排行榜（管理員專用）
+    - `top`：顯示前幾名（1-25，預設 10）
+    - `by_user=False`：依表情符號排序（哪些表情最常被使用）
+    - `by_user=True`：依成員排序（哪些成員使用最多表情符號）
 
 - `/scan_emoji_history [channel] [limit=1000] [scan_guild=False] [unlimited=False]`：掃描歷史訊息統計表情符號使用（管理員專用）
     - `channel`：要掃描的頻道（預設為當前頻道）

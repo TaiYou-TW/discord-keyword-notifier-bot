@@ -201,158 +201,65 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
     )
 
 
-@bot.tree.command(name="emoji_stats", description="查看表情符號使用排行榜")
-@app_commands.describe(guild_stats="是否查看全伺服器統計（預設 False，查看個人統計）")
-async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = False):
+@bot.tree.command(name="emoji_stats", description="查看你最常使用的表情符號與次數")
+@app_commands.describe(
+    publish="是否將結果公開（預設 False，僅自己可見）"
+)
+async def emoji_stats(interaction: discord.Interaction, publish: bool = False):
     await interaction.response.defer(ephemeral=True)
 
     uid = interaction.user.id
     conn = sqlite3.connect(bot.db_path)
-
-    if guild_stats:
-        # Check if user is in a guild
-        if not interaction.guild:
-            try:
-                await interaction.followup.send(
-                    "❌ 此功能只能在伺服器中使用！", ephemeral=True
-                )
-            except Exception as e:
-                logger.exception(
-                    "Error sending guild-only error to user %s(%d): %s",
-                    interaction.user,
-                    uid,
-                    e,
-                )
-            return
-
-        # Get guild member IDs from memory cache
-        member_ids = bot.guild_member_ids.get(interaction.guild.id, set())
-        if not member_ids:
-            # If cache is empty, try to get from guild
-            if interaction.guild.chunked:
-                member_ids = {member.id for member in interaction.guild.members}
-            else:
-                try:
-                    await interaction.followup.send(
-                        "❌ 無法獲取伺服器成員列表，請稍後再試！", ephemeral=True
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "Error sending member list error to user %s(%d): %s",
-                        interaction.user,
-                        uid,
-                        e,
-                    )
-                return
-
-        # Get top 10 most used emojis across the entire guild
-        placeholders = ",".join("?" for _ in member_ids)
-        res = conn.execute(
-            f"""
-            SELECT emoji, SUM(count) as total_count 
-            FROM emoji_usage 
-            WHERE user_id IN ({placeholders})
-            GROUP BY emoji 
-            ORDER BY total_count DESC 
-            LIMIT 10
-            """,
-            tuple(member_ids),
-        )
-        rows = res.fetchall()
-
-        if not rows:
-            try:
-                await interaction.followup.send(
-                    "📊 這個伺服器還沒有表情符號使用記錄！", ephemeral=True
-                )
-            except Exception as e:
-                logger.exception(
-                    "Error sending guild emoji stats to user %s(%d): %s",
-                    interaction.user,
-                    uid,
-                    e,
-                )
-            return
-
-        # Create embed with guild emoji statistics
-        embed = discord.Embed(
-            title=f"📊 {interaction.guild.name} 表情符號使用排行榜",
-            color=0x9B59B6,
-            timestamp=interaction.created_at,
-        )
-
-        description = ""
-        total_count = 0
-
-        for i, (emoji, count) in enumerate(rows, 1):
-            description += f"{i}. {emoji} - {count} 次\n"
-            total_count += count
-
-        embed.description = description
-        embed.set_footer(text=f"伺服器總共使用 {total_count} 個表情符號")
-
-        logger.info(
-            "User %s(%d) requested guild emoji statistics for guild %s(%d)",
-            interaction.user,
-            uid,
-            interaction.guild.name,
-            interaction.guild.id,
-        )
-    else:
-        # Get top 10 most used emojis for this user
-        res = conn.execute(
-            """
-            SELECT emoji, count 
-            FROM emoji_usage 
-            WHERE user_id = ? 
-            ORDER BY count DESC 
-            LIMIT 10
-            """,
-            (uid,),
-        )
-        rows = res.fetchall()
-
-        if not rows:
-            try:
-                await interaction.followup.send(
-                    "📊 你還沒有使用過任何表情符號！", ephemeral=True
-                )
-            except Exception as e:
-                logger.exception(
-                    "Error sending emoji stats to user %s(%d): %s",
-                    interaction.user,
-                    uid,
-                    e,
-                )
-            return
-
-        # Create embed with emoji statistics
-        embed = discord.Embed(
-            title="📊 你的表情符號使用排行榜",
-            color=0x3498DB,
-            timestamp=interaction.created_at,
-        )
-
-        description = ""
-        total_count = 0
-
-        for i, (emoji, count) in enumerate(rows, 1):
-            description += f"{i}. {emoji} - {count} 次\n"
-            total_count += count
-
-        embed.description = description
-        embed.set_footer(text=f"總共使用 {total_count} 個表情符號")
-
-        logger.info(
-            "User %s(%d) requested their emoji statistics",
-            interaction.user,
-            uid,
-        )
-
+    rows = conn.execute(
+        """
+        SELECT emoji, count
+        FROM emoji_usage
+        WHERE user_id = ?
+        ORDER BY count DESC
+        LIMIT 10
+        """,
+        (uid,),
+    ).fetchall()
+    total_count = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM emoji_usage WHERE user_id = ?",
+        (uid,),
+    ).fetchone()[0]
     conn.close()
 
+    if not rows:
+        try:
+            await interaction.followup.send(
+                "📊 你還沒有使用過任何表情符號！", ephemeral=(not publish)
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending emoji stats to user %s(%d): %s",
+                interaction.user,
+                uid,
+                e,
+            )
+        return
+
+    favorite_emoji, favorite_count = rows[0]
+    description = ""
+    for i, (emoji_str, count) in enumerate(rows, 1):
+        description += f"{i}. {emoji_str} - {count} 次\n"
+
+    embed = discord.Embed(
+        title="📊 你的表情符號使用排行榜",
+        description=description,
+        color=0x3498DB,
+        timestamp=interaction.created_at,
+    )
+    embed.add_field(
+        name="⭐ 你最愛的表情符號",
+        value=f"{favorite_emoji}（{favorite_count} 次）",
+        inline=False,
+    )
+    embed.set_footer(text=f"總共使用 {total_count} 個表情符號")
+
     try:
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=(not publish))
     except Exception as e:
         logger.exception(
             "Error sending emoji stats to user %s(%d): %s",
@@ -360,6 +267,163 @@ async def emoji_stats(interaction: discord.Interaction, guild_stats: bool = Fals
             uid,
             e,
         )
+
+    logger.info(
+        "User %s(%d) requested their emoji statistics",
+        interaction.user,
+        uid,
+    )
+
+
+@bot.tree.command(name="emoji_rank", description="[管理員] 查看伺服器表情符號使用排行榜")
+@app_commands.describe(
+    top="顯示前幾名（1-25，預設 10）",
+    by_user="改為顯示使用表情符號最多的成員排行（預設 False，顯示表情符號排行）",
+    publish="是否將結果公開（預設 False，僅自己可見）",
+)
+async def emoji_rank(
+    interaction: discord.Interaction, top: int = 10, by_user: bool = False, publish: bool = False
+):
+    # Admin only
+    if interaction.user.id not in ADMIN_USER_IDS:
+        try:
+            await interaction.response.send_message(
+                "❌ 此命令僅限管理員使用！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending admin check message to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    await interaction.response.defer(ephemeral=(not publish))
+
+    if not interaction.guild:
+        try:
+            await interaction.followup.send(
+                "❌ 此命令只能在伺服器中使用！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending guild-only error to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    top = max(1, min(top, 25))
+
+    # Resolve guild member IDs (memory cache, fall back to chunked members).
+    member_ids = bot.guild_member_ids.get(interaction.guild.id, set())
+    if not member_ids and interaction.guild.chunked:
+        member_ids = {member.id for member in interaction.guild.members}
+    if not member_ids:
+        try:
+            await interaction.followup.send(
+                "❌ 無法獲取伺服器成員列表，請稍後再試！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending member list error to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    placeholders = ",".join("?" for _ in member_ids)
+    conn = sqlite3.connect(bot.db_path)
+
+    if by_user:
+        rows = conn.execute(
+            f"""
+            SELECT user_id, SUM(count) AS total_count
+            FROM emoji_usage
+            WHERE user_id IN ({placeholders})
+            GROUP BY user_id
+            ORDER BY total_count DESC
+            LIMIT ?
+            """,
+            (*member_ids, top),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""
+            SELECT emoji, SUM(count) AS total_count
+            FROM emoji_usage
+            WHERE user_id IN ({placeholders})
+            GROUP BY emoji
+            ORDER BY total_count DESC
+            LIMIT ?
+            """,
+            (*member_ids, top),
+        ).fetchall()
+    conn.close()
+
+    if not rows:
+        try:
+            await interaction.followup.send(
+                "📊 這個伺服器還沒有表情符號使用記錄！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending emoji rank to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    if by_user:
+        description = ""
+        for i, (user_id, count) in enumerate(rows, 1):
+            member = interaction.guild.get_member(user_id)
+            name = member.display_name if member else f"<@{user_id}>"
+            description += f"{i}. {name} - {count} 次\n"
+        embed = discord.Embed(
+            title=f"🏆 {interaction.guild.name} 表情符號使用者排行榜",
+            description=description,
+            color=0xE67E22,
+            timestamp=interaction.created_at,
+        )
+        embed.set_footer(text="依每位成員使用表情符號的總次數排序")
+    else:
+        description = ""
+        total_count = 0
+        for i, (emoji_str, count) in enumerate(rows, 1):
+            description += f"{i}. {emoji_str} - {count} 次\n"
+            total_count += count
+        embed = discord.Embed(
+            title=f"📊 {interaction.guild.name} 表情符號使用排行榜",
+            description=description,
+            color=0x9B59B6,
+            timestamp=interaction.created_at,
+        )
+        embed.set_footer(text=f"前 {len(rows)} 名共使用 {total_count} 個表情符號")
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=(not publish))
+    except Exception as e:
+        logger.exception(
+            "Error sending emoji rank to user %s(%d): %s",
+            interaction.user,
+            interaction.user.id,
+            e,
+        )
+
+    logger.info(
+        "Admin %s(%d) requested emoji rank (by_user=%s, top=%d) for guild %s(%d)",
+        interaction.user,
+        interaction.user.id,
+        by_user,
+        top,
+        interaction.guild.name,
+        interaction.guild.id,
+    )
 
 
 @bot.tree.command(name="clear_emoji_stats", description="[管理員] 清除表情符號統計資料")
