@@ -206,7 +206,7 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
     publish="是否將結果公開（預設 False，僅自己可見）"
 )
 async def emoji_stats(interaction: discord.Interaction, publish: bool = False):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=(not publish))
 
     uid = interaction.user.id
     conn = sqlite3.connect(bot.db_path)
