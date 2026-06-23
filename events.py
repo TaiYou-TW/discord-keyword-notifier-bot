@@ -85,11 +85,26 @@ async def on_member_remove(member):
 
 @bot.event
 async def on_message(message):
+    # Record emoji usage for every message, regardless of the branches below.
+    bot.loop.create_task(bot.record_message_emojis(message))
     if bot.user in message.mentions:
         await bot.reply_when_mentioned(message)
         return
 
     await bot.check_and_notify(message)
+
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    # Record emoji usage when a user reacts. The raw event fires even for
+    # messages that aren't in the bot's cache, so old messages are covered too.
+    if payload.user_id == bot.user.id:
+        return
+    # payload.member is populated for guild reactions; skip other bots.
+    if payload.member is not None and payload.member.bot:
+        return
+
+    await bot.record_emoji_usage(payload.user_id, str(payload.emoji))
 
 
 @bot.event
