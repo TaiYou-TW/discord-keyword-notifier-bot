@@ -31,7 +31,10 @@ async def on_ready():
             HOLODEX_CHANNEL_IDS or HOLODEX_ORG,
             HOLODEX_POLL_INTERVAL,
         )
-        bot.loop.create_task(bot.holodex_live_monitor())
+        if bot.holodex_monitor_task is None or bot.holodex_monitor_task.done():
+            bot.holodex_monitor_task = bot.loop.create_task(
+                bot.holodex_live_monitor()
+            )
 
     if TWITTER_SCREEN_NAMES and TWITTER_NOTIFY_CHANNEL_ID:
         logger.info(
@@ -105,7 +108,33 @@ async def on_raw_reaction_add(payload):
     if payload.member is not None and payload.member.bot:
         return
 
-    await bot.record_emoji_usage(payload.user_id, str(payload.emoji))
+    server_id = payload.guild_id or 0
+
+    # The reaction recipient is the reacted message's author. message_author_id
+    # is filled in for free when the message is cached; otherwise fetch it.
+    received_user_id = payload.message_author_id or 0
+    if not received_user_id:
+        channel = bot.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(payload.channel_id)
+            except Exception:
+                channel = None
+        if channel is not None:
+            try:
+                message = await channel.fetch_message(payload.message_id)
+                if not message.author.bot:
+                    received_user_id = message.author.id
+            except Exception:
+                received_user_id = 0
+
+    # Don't attribute received reactions to the bot's own messages.
+    if received_user_id == bot.user.id:
+        received_user_id = 0
+
+    await bot.record_emoji_usage(
+        payload.user_id, str(payload.emoji), received_user_id, server_id
+    )
 
 
 @bot.event
