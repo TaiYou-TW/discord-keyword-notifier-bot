@@ -319,7 +319,6 @@ async def emoji_rank(
     top = max(1, min(top, 25))
     server_id = interaction.guild.id
     conn = sqlite3.connect(bot.db_path)
-
     if by_user:
         rows = conn.execute(
             """
