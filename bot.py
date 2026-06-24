@@ -18,6 +18,23 @@ from enums import HolodexNotifyType
 # Match Discord custom emojis (both static and animated): <:name:id> / <a:name:id>
 CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:\w+:\d+>")
 
+# emoji_usage tracks counts per (user, emoji, recipient, server):
+#   user_id          - who used the emoji (message author or reactor)
+#   received_user_id - reaction recipient (the reacted message's author);
+#                      0 for message content, which has no recipient
+#   server_id        - guild id; 0 for DMs / no guild
+EMOJI_USAGE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS emoji_usage (
+        user_id INTEGER NOT NULL,
+        emoji TEXT NOT NULL,
+        received_user_id INTEGER NOT NULL DEFAULT 0,
+        server_id INTEGER NOT NULL DEFAULT 0,
+        count INTEGER NOT NULL DEFAULT 1,
+        last_used INTEGER,
+        PRIMARY KEY (user_id, emoji, received_user_id, server_id)
+    )
+"""
+
 
 def extract_emojis(text: str) -> list[str]:
     """Return every emoji in ``text`` (custom Discord + Unicode), preserving repeats."""
@@ -56,6 +73,7 @@ class MyBot(
             HolodexNotifyType.LIVE: {},
             HolodexNotifyType.UPCOMING: {},
         }
+        self.holodex_monitor_task = None
         self.twitter_profile_notified = {}
         self.twitter_monitor_task = None
         self.yt_community_notified = {}
@@ -67,6 +85,38 @@ class MyBot(
         self.notified_message_keywords = (
             set()
         )  # Set[str], key = f"{message_id}:{keyword}"
+
+    def _ensure_emoji_usage_schema(self, conn: sqlite3.Connection) -> None:
+        """Create emoji_usage, migrating the older (user_id, emoji) schema.
+
+        Older rows predate the received_user_id/server_id columns, so they are
+        copied in with both set to 0 (treated as message usage in no guild).
+        """
+        cols = [
+            row[1] for row in conn.execute("PRAGMA table_info(emoji_usage)").fetchall()
+        ]
+        if cols and ("received_user_id" not in cols or "server_id" not in cols):
+            logger.info(
+                "Migrating emoji_usage to new schema (received_user_id, server_id)..."
+            )
+            conn.execute("ALTER TABLE emoji_usage RENAME TO emoji_usage_legacy")
+            conn.execute(EMOJI_USAGE_SCHEMA)
+            conn.execute(
+                """
+                INSERT INTO emoji_usage
+                    (user_id, emoji, received_user_id, server_id, count, last_used)
+                SELECT user_id, emoji, 0, 0, count, last_used FROM emoji_usage_legacy
+                """
+            )
+            conn.execute("DROP TABLE emoji_usage_legacy")
+            logger.info("emoji_usage migration complete.")
+        else:
+            conn.execute(EMOJI_USAGE_SCHEMA)
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_emoji_usage_server_received "
+            "ON emoji_usage(server_id, received_user_id)"
+        )
 
     async def setup_hook(self):
         logger.info("Setting up database...")
@@ -90,9 +140,7 @@ class MyBot(
         conn.execute(
             "CREATE TABLE IF NOT EXISTS yt_community_notified (source_key TEXT, post_id TEXT, PRIMARY KEY (source_key, post_id))"
         )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS emoji_usage (user_id INTEGER, emoji TEXT, count INTEGER DEFAULT 1, last_used INTEGER, PRIMARY KEY (user_id, emoji))"
-        )
+        self._ensure_emoji_usage_schema(conn)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS muted_channels (user_id INTEGER, channel_id INTEGER, PRIMARY KEY (user_id, channel_id))"
         )
@@ -196,7 +244,13 @@ class MyBot(
         conn.close()
         return result[0] if result else 0
 
-    def _record_emoji_usage_sync(self, user_id: int, emoji: str) -> None:
+    def _record_emoji_usage_sync(
+        self,
+        user_id: int,
+        emoji: str,
+        received_user_id: int = 0,
+        server_id: int = 0,
+    ) -> None:
         """Synchronous helper for emoji usage update, safe inside executor."""
         import time
 
@@ -204,25 +258,38 @@ class MyBot(
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
-            INSERT INTO emoji_usage (user_id, emoji, count, last_used)
-            VALUES (?, ?, 1, ?)
-            ON CONFLICT(user_id, emoji) DO UPDATE SET 
+            INSERT INTO emoji_usage (user_id, emoji, received_user_id, server_id, count, last_used)
+            VALUES (?, ?, ?, ?, 1, ?)
+            ON CONFLICT(user_id, emoji, received_user_id, server_id) DO UPDATE SET
                 count = count + 1,
                 last_used = excluded.last_used
             """,
-            (user_id, emoji, current_time),
+            (user_id, emoji, received_user_id, server_id, current_time),
         )
         conn.commit()
         conn.close()
 
-    async def record_emoji_usage(self, user_id: int, emoji: str) -> None:
+    async def record_emoji_usage(
+        self,
+        user_id: int,
+        emoji: str,
+        received_user_id: int = 0,
+        server_id: int = 0,
+    ) -> None:
         """Record a single emoji use asynchronously via thread executor.
 
-        Used for reactions. Errors are logged and swallowed so a DB hiccup
-        never bubbles up into the event handler that called it.
+        Used for reactions: ``user_id`` reacted to ``received_user_id``'s
+        message in ``server_id`` with ``emoji``. Errors are logged and
+        swallowed so a DB hiccup never bubbles up into the event handler.
         """
         try:
-            await asyncio.to_thread(self._record_emoji_usage_sync, user_id, emoji)
+            await asyncio.to_thread(
+                self._record_emoji_usage_sync,
+                user_id,
+                emoji,
+                received_user_id,
+                server_id,
+            )
         except Exception:
             logger.exception("Failed to record emoji usage for user %d", user_id)
 
@@ -233,7 +300,9 @@ class MyBot(
         emojis = extract_emojis(message.content)
         if not emojis:
             return
-        counter = Counter((message.author.id, e) for e in emojis)
+        # Message content has no reaction recipient -> received_user_id = 0.
+        server_id = message.guild.id if message.guild else 0
+        counter = Counter((message.author.id, e, 0, server_id) for e in emojis)
         try:
             await asyncio.to_thread(self._batch_record_emoji_usage_sync, counter)
         except Exception:
@@ -249,6 +318,7 @@ class MyBot(
         """Scan channel history for emoji usage statistics"""
         messages_scanned = 0
         emojis_found = 0
+        server_id = channel.guild.id if channel.guild else 0
 
         try:
             # If limit is None, use None to get all messages (no limit)
@@ -259,8 +329,9 @@ class MyBot(
 
                 messages_scanned += 1
 
+                # History scan covers message content only (no recipient).
                 for found in extract_emojis(message.content):
-                    local_counter[(message.author.id, found)] += 1
+                    local_counter[(message.author.id, found, 0, server_id)] += 1
                     emojis_found += 1
 
                 # yield control to event loop regularly
@@ -351,16 +422,16 @@ class MyBot(
         now = int(time.time())
 
         # one SQL statement per unique key for simplicity
-        for (user_id, emoji), delta in counter.items():
+        for (user_id, emoji, received_user_id, server_id), delta in counter.items():
             conn.execute(
                 """
-                INSERT INTO emoji_usage (user_id, emoji, count, last_used)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, emoji) DO UPDATE SET
+                INSERT INTO emoji_usage (user_id, emoji, received_user_id, server_id, count, last_used)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, emoji, received_user_id, server_id) DO UPDATE SET
                     count = count + ?,
                     last_used = ?
                 """,
-                (user_id, emoji, delta, now, delta, now),
+                (user_id, emoji, received_user_id, server_id, delta, now, delta, now),
             )
 
         conn.commit()

@@ -212,10 +212,11 @@ async def emoji_stats(interaction: discord.Interaction, publish: bool = False):
     conn = sqlite3.connect(bot.db_path)
     rows = conn.execute(
         """
-        SELECT emoji, count
+        SELECT emoji, SUM(count) AS total
         FROM emoji_usage
         WHERE user_id = ?
-        ORDER BY count DESC
+        GROUP BY emoji
+        ORDER BY total DESC
         LIMIT 10
         """,
         (uid,),
@@ -316,57 +317,31 @@ async def emoji_rank(
         return
 
     top = max(1, min(top, 25))
-
-    # Resolve guild member IDs (memory cache, fall back to chunked members).
-    member_ids = bot.guild_member_ids.get(interaction.guild.id, set())
-    if not member_ids and interaction.guild.chunked:
-        member_ids = {member.id for member in interaction.guild.members}
-    if not member_ids:
-        try:
-            await interaction.followup.send(
-                "❌ 無法獲取伺服器成員列表，請稍後再試！", ephemeral=True
-            )
-        except Exception as e:
-            logger.exception(
-                "Error sending member list error to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
-        return
-
-    if len(member_ids) > 998:
-        await interaction.followup.send(
-            "❌ 伺服器成員數量過多，無法產生排行榜（SQLite 參數上限）。",
-            ephemeral=True,
-        )
-        return
-
-    placeholders = ",".join("?" for _ in member_ids)
+    server_id = interaction.guild.id
     conn = sqlite3.connect(bot.db_path)
     if by_user:
         rows = conn.execute(
-            f"""
+            """
             SELECT user_id, SUM(count) AS total_count
             FROM emoji_usage
-            WHERE user_id IN ({placeholders})
+            WHERE server_id = ?
             GROUP BY user_id
             ORDER BY total_count DESC
             LIMIT ?
             """,
-            (*member_ids, top),
+            (server_id, top),
         ).fetchall()
     else:
         rows = conn.execute(
-            f"""
+            """
             SELECT emoji, SUM(count) AS total_count
             FROM emoji_usage
-            WHERE user_id IN ({placeholders})
+            WHERE server_id = ?
             GROUP BY emoji
             ORDER BY total_count DESC
             LIMIT ?
             """,
-            (*member_ids, top),
+            (server_id, top),
         ).fetchall()
     conn.close()
 
@@ -426,6 +401,202 @@ async def emoji_rank(
         interaction.user,
         interaction.user.id,
         by_user,
+        top,
+        interaction.guild.name,
+        interaction.guild.id,
+    )
+
+
+@bot.tree.command(
+    name="emoji_received_stats",
+    description="查看你收到最多的表情回應（reaction）與次數",
+)
+@app_commands.describe(
+    publish="是否將結果公開（預設 False，僅自己可見）",
+)
+async def emoji_received_stats(
+    interaction: discord.Interaction, publish: bool = False
+):
+    await interaction.response.defer(ephemeral=(not publish))
+
+    uid = interaction.user.id
+    conn = sqlite3.connect(bot.db_path)
+    # received_user_id = me: reactions others left on my messages.
+    # user_id != me: exclude my own reactions on my own messages.
+    rows = conn.execute(
+        """
+        SELECT emoji, SUM(count) AS total
+        FROM emoji_usage
+        WHERE received_user_id = ?
+          AND user_id != ?
+        GROUP BY emoji
+        ORDER BY total DESC
+        LIMIT 10
+        """,
+        (uid, uid),
+    ).fetchall()
+    total_count = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM emoji_usage WHERE received_user_id = ? AND user_id != ?",
+        (uid, uid),
+    ).fetchone()[0]
+    conn.close()
+
+    if not rows:
+        try:
+            await interaction.followup.send(
+                "📊 你還沒有收到任何表情回應！", ephemeral=(not publish)
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending emoji received stats to user %s(%d): %s",
+                interaction.user,
+                uid,
+                e,
+            )
+        return
+
+    favorite_emoji, favorite_count = rows[0]
+    description = ""
+    for i, (emoji_str, count) in enumerate(rows, 1):
+        description += f"{i}. {emoji_str} - {count} 次\n"
+
+    embed = discord.Embed(
+        title="💝 你收到的表情回應排行榜",
+        description=description,
+        color=0xE91E63,
+        timestamp=interaction.created_at,
+    )
+    embed.add_field(
+        name="⭐ 你最常收到的表情符號",
+        value=f"{favorite_emoji}（{favorite_count} 次）",
+        inline=False,
+    )
+    embed.set_footer(text=f"總共收到 {total_count} 個表情回應")
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=(not publish))
+    except Exception as e:
+        logger.exception(
+            "Error sending emoji received stats to user %s(%d): %s",
+            interaction.user,
+            uid,
+            e,
+        )
+
+    logger.info(
+        "User %s(%d) requested their received emoji statistics",
+        interaction.user,
+        uid,
+    )
+
+
+@bot.tree.command(
+    name="emoji_received_rank",
+    description="[管理員] 查看本伺服器收到最多表情回應（reaction）的成員排行榜",
+)
+@app_commands.describe(
+    top="顯示前幾名（1-25，預設 10）",
+    publish="是否將結果公開（預設 False，僅自己可見）",
+)
+async def emoji_received_rank(
+    interaction: discord.Interaction, top: int = 10, publish: bool = False
+):
+    # Admin only
+    if interaction.user.id not in ADMIN_USER_IDS:
+        try:
+            await interaction.response.send_message(
+                "❌ 此命令僅限管理員使用！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending admin check message to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    await interaction.response.defer(ephemeral=(not publish))
+
+    if not interaction.guild:
+        try:
+            await interaction.followup.send(
+                "❌ 此命令只能在伺服器中使用！", ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending guild-only error to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    top = max(1, min(top, 25))
+    server_id = interaction.guild.id
+
+    conn = sqlite3.connect(bot.db_path)
+    # received_user_id != 0 keeps reaction rows only (message content stores 0);
+    # received_user_id != user_id ignores reactions on one's own message.
+    rows = conn.execute(
+        """
+        SELECT received_user_id, SUM(count) AS total_count
+        FROM emoji_usage
+        WHERE server_id = ?
+          AND received_user_id != 0
+          AND received_user_id != user_id
+        GROUP BY received_user_id
+        ORDER BY total_count DESC
+        LIMIT ?
+        """,
+        (server_id, top),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        try:
+            await interaction.followup.send(
+                "📊 這個伺服器還沒有任何表情回應記錄！", ephemeral=(not publish)
+            )
+        except Exception as e:
+            logger.exception(
+                "Error sending emoji received rank to user %s(%d): %s",
+                interaction.user,
+                interaction.user.id,
+                e,
+            )
+        return
+
+    description = ""
+    total_count = 0
+    for i, (received_user_id, count) in enumerate(rows, 1):
+        member = interaction.guild.get_member(received_user_id)
+        name = member.display_name if member else f"<@{received_user_id}>"
+        description += f"{i}. {name} - {count} 次\n"
+        total_count += count
+
+    embed = discord.Embed(
+        title=f"💝 {interaction.guild.name} 收到最多表情回應的成員",
+        description=description,
+        color=0xE91E63,
+        timestamp=interaction.created_at,
+    )
+    embed.set_footer(text=f"前 {len(rows)} 名共收到 {total_count} 個表情回應")
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=(not publish))
+    except Exception as e:
+        logger.exception(
+            "Error sending emoji received rank to user %s(%d): %s",
+            interaction.user,
+            interaction.user.id,
+            e,
+        )
+
+    logger.info(
+        "Admin %s(%d) requested emoji received rank (top=%d) for guild %s(%d)",
+        interaction.user,
+        interaction.user.id,
         top,
         interaction.guild.name,
         interaction.guild.id,
