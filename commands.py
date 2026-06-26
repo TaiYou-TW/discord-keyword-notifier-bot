@@ -202,9 +202,7 @@ async def notify_remove(interaction: discord.Interaction, keyword: str):
 
 
 @bot.tree.command(name="emoji_stats", description="查看你最常使用的表情符號與次數")
-@app_commands.describe(
-    publish="是否將結果公開（預設 False，僅自己可見）"
-)
+@app_commands.describe(publish="是否將結果公開（預設 False，僅自己可見）")
 async def emoji_stats(interaction: discord.Interaction, publish: bool = False):
     await interaction.response.defer(ephemeral=(not publish))
 
@@ -276,14 +274,19 @@ async def emoji_stats(interaction: discord.Interaction, publish: bool = False):
     )
 
 
-@bot.tree.command(name="emoji_rank", description="[管理員] 查看伺服器表情符號使用排行榜")
+@bot.tree.command(
+    name="emoji_rank", description="[管理員] 查看伺服器表情符號使用排行榜"
+)
 @app_commands.describe(
     top="顯示前幾名（1-25，預設 10）",
     by_user="改為顯示使用表情符號最多的成員排行（預設 False，顯示表情符號排行）",
     publish="是否將結果公開（預設 False，僅自己可見）",
 )
 async def emoji_rank(
-    interaction: discord.Interaction, top: int = 10, by_user: bool = False, publish: bool = False
+    interaction: discord.Interaction,
+    top: int = 10,
+    by_user: bool = False,
+    publish: bool = False,
 ):
     # Admin only
     if interaction.user.id not in ADMIN_USER_IDS:
@@ -322,26 +325,72 @@ async def emoji_rank(
     if by_user:
         rows = conn.execute(
             """
-            SELECT user_id, SUM(count) AS total_count
-            FROM emoji_usage
-            WHERE server_id = ?
-            GROUP BY user_id
-            ORDER BY total_count DESC
+            WITH user_totals AS (
+                SELECT user_id, SUM(count) AS total_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                GROUP BY user_id
+            ),
+            emoji_totals AS (
+                SELECT user_id, emoji, SUM(count) AS emoji_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                GROUP BY user_id, emoji
+            ),
+            ranked_emojis AS (
+                SELECT user_id, emoji, emoji_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY user_id
+                           ORDER BY emoji_count DESC, emoji
+                       ) AS rn
+                FROM emoji_totals
+            )
+            SELECT u.user_id, u.total_count, t.emoji
+            FROM user_totals u
+            LEFT JOIN ranked_emojis t
+              ON t.user_id = u.user_id
+             AND t.rn = 1
+            ORDER BY u.total_count DESC
             LIMIT ?
             """,
-            (server_id, top),
+            (server_id, server_id, top),
         ).fetchall()
     else:
         rows = conn.execute(
             """
-            SELECT emoji, SUM(count) AS total_count
-            FROM emoji_usage
-            WHERE server_id = ?
-            GROUP BY emoji
-            ORDER BY total_count DESC
+            WITH user_totals AS (
+                SELECT received_user_id AS user_id, SUM(count) AS total_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                  AND received_user_id != 0
+                  AND received_user_id != user_id
+                GROUP BY received_user_id
+            ),
+            emoji_totals AS (
+                SELECT received_user_id AS user_id, emoji, SUM(count) AS emoji_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                  AND received_user_id != 0
+                  AND received_user_id != user_id
+                GROUP BY received_user_id, emoji
+            ),
+            ranked_emojis AS (
+                SELECT user_id, emoji, emoji_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY user_id
+                           ORDER BY emoji_count DESC, emoji
+                       ) AS rn
+                FROM emoji_totals
+            )
+            SELECT u.user_id, u.total_count, t.emoji
+            FROM user_totals u
+            LEFT JOIN ranked_emojis t
+              ON t.user_id = u.user_id
+             AND t.rn = 1
+            ORDER BY u.total_count DESC
             LIMIT ?
             """,
-            (server_id, top),
+            (server_id, server_id, top),
         ).fetchall()
     conn.close()
 
@@ -361,10 +410,11 @@ async def emoji_rank(
 
     if by_user:
         description = ""
-        for i, (user_id, count) in enumerate(rows, 1):
+        for i, (user_id, count, top_emoji) in enumerate(rows, 1):
             member = interaction.guild.get_member(user_id)
             name = member.display_name if member else f"<@{user_id}>"
-            description += f"{i}. {name} - {count} 次\n"
+            emoji_suffix = f"，最常用：{top_emoji}" if top_emoji else ""
+            description += f"{i}. {name} - {count} 次{emoji_suffix}\n"
         embed = discord.Embed(
             title=f"🏆 {interaction.guild.name} 表情符號使用者排行榜",
             description=description,
@@ -414,9 +464,7 @@ async def emoji_rank(
 @app_commands.describe(
     publish="是否將結果公開（預設 False，僅自己可見）",
 )
-async def emoji_received_stats(
-    interaction: discord.Interaction, publish: bool = False
-):
+async def emoji_received_stats(interaction: discord.Interaction, publish: bool = False):
     await interaction.response.defer(ephemeral=(not publish))
 
     uid = interaction.user.id
@@ -540,16 +588,39 @@ async def emoji_received_rank(
     # received_user_id != user_id ignores reactions on one's own message.
     rows = conn.execute(
         """
-        SELECT received_user_id, SUM(count) AS total_count
-        FROM emoji_usage
-        WHERE server_id = ?
-          AND received_user_id != 0
-          AND received_user_id != user_id
-        GROUP BY received_user_id
-        ORDER BY total_count DESC
+        WITH user_totals AS (
+                SELECT received_user_id AS user_id, SUM(count) AS total_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                    AND received_user_id != 0
+                    AND received_user_id != user_id
+                GROUP BY received_user_id
+        ),
+        emoji_totals AS (
+                SELECT received_user_id AS user_id, emoji, SUM(count) AS emoji_count
+                FROM emoji_usage
+                WHERE server_id = ?
+                    AND received_user_id != 0
+                    AND received_user_id != user_id
+                GROUP BY received_user_id, emoji
+        ),
+        ranked_emojis AS (
+                SELECT user_id, emoji, emoji_count,
+                                ROW_NUMBER() OVER (
+                                        PARTITION BY user_id
+                                        ORDER BY emoji_count DESC, emoji
+                                ) AS rn
+                FROM emoji_totals
+        )
+        SELECT u.user_id, u.total_count, t.emoji
+        FROM user_totals u
+        LEFT JOIN ranked_emojis t
+            ON t.user_id = u.user_id
+            AND t.rn = 1
+        ORDER BY u.total_count DESC
         LIMIT ?
         """,
-        (server_id, top),
+        (server_id, server_id, top),
     ).fetchall()
     conn.close()
 
@@ -569,10 +640,11 @@ async def emoji_received_rank(
 
     description = ""
     total_count = 0
-    for i, (received_user_id, count) in enumerate(rows, 1):
+    for i, (received_user_id, count, top_emoji) in enumerate(rows, 1):
         member = interaction.guild.get_member(received_user_id)
         name = member.display_name if member else f"<@{received_user_id}>"
-        description += f"{i}. {name} - {count} 次\n"
+        emoji_suffix = f"，最常收：{top_emoji}" if top_emoji else ""
+        description += f"{i}. {name} - {count} 次{emoji_suffix}\n"
         total_count += count
 
     embed = discord.Embed(
@@ -666,7 +738,9 @@ async def clear_emoji_stats(interaction: discord.Interaction):
             )
 
 
-@bot.tree.command(name="scan_emoji_history", description="[管理員] 掃描歷史訊息中的表情符號使用情況")
+@bot.tree.command(
+    name="scan_emoji_history", description="[管理員] 掃描歷史訊息中的表情符號使用情況"
+)
 @app_commands.describe(
     channel="要掃描的頻道（若不指定且 scan_guild=False，則為當前頻道）",
     limit="每個頻道的掃描訊息數量上限（預設 1000，當 unlimited=True 時無效）",
