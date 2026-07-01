@@ -358,39 +358,14 @@ async def emoji_rank(
     else:
         rows = conn.execute(
             """
-            WITH user_totals AS (
-                SELECT received_user_id AS user_id, SUM(count) AS total_count
-                FROM emoji_usage
-                WHERE server_id = ?
-                  AND received_user_id != 0
-                  AND received_user_id != user_id
-                GROUP BY received_user_id
-            ),
-            emoji_totals AS (
-                SELECT received_user_id AS user_id, emoji, SUM(count) AS emoji_count
-                FROM emoji_usage
-                WHERE server_id = ?
-                  AND received_user_id != 0
-                  AND received_user_id != user_id
-                GROUP BY received_user_id, emoji
-            ),
-            ranked_emojis AS (
-                SELECT user_id, emoji, emoji_count,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY user_id
-                           ORDER BY emoji_count DESC, emoji
-                       ) AS rn
-                FROM emoji_totals
-            )
-            SELECT u.user_id, u.total_count, t.emoji
-            FROM user_totals u
-            LEFT JOIN ranked_emojis t
-              ON t.user_id = u.user_id
-             AND t.rn = 1
-            ORDER BY u.total_count DESC
+            SELECT emoji, SUM(count) AS total_count
+            FROM emoji_usage
+            WHERE server_id = ?
+            GROUP BY emoji
+            ORDER BY total_count DESC, emoji
             LIMIT ?
             """,
-            (server_id, server_id, top),
+            (server_id, top),
         ).fetchall()
     conn.close()
 
