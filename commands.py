@@ -929,3 +929,113 @@ async def scan_emoji_history(
                 interaction.user.id,
                 e2,
             )
+
+
+@bot.tree.command(
+    name="verify_membership",
+    description="連結 YouTube 帳號以驗證頻道會員資格並取得會員身分組",
+)
+async def verify_membership(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    url = bot.build_oauth_url(interaction.user.id)
+    embed = discord.Embed(
+        title="🔗 YouTube 會員驗證",
+        description=(
+            "點擊下方連結，使用你的 Google 帳號授權，"
+            "Bot 會確認你是否為指定頻道的會員並自動給予身分組。\n\n"
+            f"**[點此開始授權]({url})**\n\n"
+            "⚠️ 此連結僅限你本人使用、15 分鐘內有效，請勿分享。"
+        ),
+        color=0xE74C3C,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    logger.info(
+        "User %s(%d) started membership verification",
+        interaction.user,
+        interaction.user.id,
+    )
+
+
+@bot.tree.command(name="membership_status", description="查看你的 YouTube 會員驗證狀態")
+async def membership_status(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    row = bot.get_membership_row(interaction.user.id)
+    if not row:
+        await interaction.followup.send(
+            "你尚未連結 YouTube 帳號，請使用 `/verify_membership`。", ephemeral=True
+        )
+        return
+
+    _, yt_channel_id, _, is_member, last_checked = row
+    status = "✅ 會員" if is_member else "❌ 非會員 / 未確認"
+    checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+    await interaction.followup.send(
+        f"YouTube 頻道：`{yt_channel_id or '未知'}`\n"
+        f"狀態：{status}\n"
+        f"最後檢查：{checked}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="membership_unlink", description="解除 YouTube 帳號連結並移除會員身分組"
+)
+async def membership_unlink(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    removed = await bot.unlink_membership(interaction.user.id)
+    if removed:
+        await interaction.followup.send(
+            "✅ 已解除連結並撤銷授權，會員身分組已移除。", ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            "你尚未連結任何 YouTube 帳號。", ephemeral=True
+        )
+    logger.info(
+        "User %s(%d) unlinked membership", interaction.user, interaction.user.id
+    )
+
+
+@bot.tree.command(
+    name="membership_recheck",
+    description="[管理員] 立即重新驗證所有已連結成員的會員資格",
+)
+async def membership_recheck(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    bot.loop.create_task(bot.membership_recheck_all())
+    await interaction.followup.send(
+        "🔄 已在背景開始重新驗證所有已連結成員。", ephemeral=True
+    )
+    logger.info(
+        "Admin %s(%d) triggered membership recheck",
+        interaction.user,
+        interaction.user.id,
+    )

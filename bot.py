@@ -10,6 +10,7 @@ import emoji
 from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2, ADMIN_USER_IDS
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
+from membership import MembershipMixin
 from twitter_syndication import TwitterSyndicationMixin
 from youtube_community import YouTubeCommunityMixin
 from enums import HolodexNotifyType
@@ -50,6 +51,7 @@ class MyBot(
     TwitterSyndicationMixin,
     HolodexMixin,
     KeywordMixin,
+    MembershipMixin,
     discord.Client,
 ):
     def __init__(self):
@@ -80,6 +82,13 @@ class MyBot(
         self.yt_community_monitor_task = None
         self.guild_member_ids = {}  # { guild_id: set(user_id) }
         self.muted_channel_ids = {}  # { user_id: set(channel_id) }
+
+        # YouTube membership verification (see MembershipMixin)
+        self.membership_monitor_task = None
+        self._membership_runner = None
+        self._fernet_cache = False  # sentinel: cipher not built yet
+        self._probe_cache = []
+        self._probe_cache_ts = 0
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (
@@ -144,6 +153,7 @@ class MyBot(
         conn.execute(
             "CREATE TABLE IF NOT EXISTS muted_channels (user_id INTEGER, channel_id INTEGER, PRIMARY KEY (user_id, channel_id))"
         )
+        self.ensure_membership_schema(conn)
         conn.commit()
         conn.close()
 

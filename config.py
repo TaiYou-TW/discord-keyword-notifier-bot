@@ -91,4 +91,45 @@ YT_NOTIFY_CHANNEL_ID = int(YT_NOTIFY_CHANNEL_ID) if YT_NOTIFY_CHANNEL_ID else No
 YT_POLL_INTERVAL = int(os.getenv("YT_POLL_INTERVAL", "60"))
 YT_MEMORY_LIMIT = int(os.getenv("YT_MEMORY_LIMIT", "2000"))
 
+# YouTube membership verification via Google OAuth
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+GOOGLE_OAUTH_REDIRECT_URI = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "")
+# Least-privilege scope; enough to read comment threads. If members-only reads
+# get 403, switch to https://www.googleapis.com/auth/youtube.force-ssl
+MEMBERSHIP_OAUTH_SCOPE = os.getenv(
+    "MEMBERSHIP_OAUTH_SCOPE", "https://www.googleapis.com/auth/youtube.readonly"
+)
+MEMBERSHIP_OAUTH_HOST = os.getenv("MEMBERSHIP_OAUTH_HOST", "0.0.0.0")
+MEMBERSHIP_OAUTH_PORT = int(os.getenv("MEMBERSHIP_OAUTH_PORT", "8081"))
+
+MEMBERSHIP_GUILD_ID = os.getenv("MEMBERSHIP_GUILD_ID")
+MEMBERSHIP_GUILD_ID = int(MEMBERSHIP_GUILD_ID) if MEMBERSHIP_GUILD_ID else None
+MEMBERSHIP_ROLE_ID = os.getenv("MEMBERSHIP_ROLE_ID")
+MEMBERSHIP_ROLE_ID = int(MEMBERSHIP_ROLE_ID) if MEMBERSHIP_ROLE_ID else None
+
+# Target channel to verify membership for (UC... id). The members-only uploads
+# playlist is derived from it (UC... -> UUMO...).
+MEMBERSHIP_YT_CHANNEL_ID = os.getenv("MEMBERSHIP_YT_CHANNEL_ID", "")
+# Optional manual override of members-only probe video ids (CSV). When empty,
+# they are auto-discovered from the UUMO members-only uploads playlist.
+MEMBERSHIP_PROBE_VIDEO_IDS = [
+    v.strip()
+    for v in os.getenv("MEMBERSHIP_PROBE_VIDEO_IDS", "").split(",")
+    if v.strip()
+]
+# Optional YouTube Data API key used to list the members-only playlist without
+# depending on a member's token. Recommended for reliable auto-discovery.
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+
+# Fernet key (base64, 32 bytes) to encrypt stored refresh tokens at rest.
+# Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+MEMBERSHIP_TOKEN_ENC_KEY = os.getenv("MEMBERSHIP_TOKEN_ENC_KEY", "")
+# How often (seconds) to re-verify every linked member. commentThreads.list is
+# 1 quota unit and the default project quota is 10k/day shared across all
+# users' checks, so keep this generous.
+MEMBERSHIP_CHECK_INTERVAL = int(os.getenv("MEMBERSHIP_CHECK_INTERVAL", "21600"))
+# Optional URL to redirect the browser to after the OAuth callback completes.
+MEMBERSHIP_SUCCESS_REDIRECT = os.getenv("MEMBERSHIP_SUCCESS_REDIRECT", "")
+
 ZERO_WIDTH_SPACE = "\u200b"
