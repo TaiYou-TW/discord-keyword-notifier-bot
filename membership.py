@@ -680,6 +680,10 @@ class MembershipMixin:
     def _oauth_page(self, message: str, ok: bool | None):
         if MEMBERSHIP_SUCCESS_REDIRECT:
             return web.HTTPFound(MEMBERSHIP_SUCCESS_REDIRECT)
+
+        from html import escape
+
+        safe_message = escape(message)
         color = "#2ecc71" if ok else ("#e74c3c" if ok is False else "#f1c40f")
         html = (
             '<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">'
@@ -691,6 +695,6 @@ class MembershipMixin:
             f'<div style="max-width:460px;padding:2rem;border-radius:12px;'
             f'background:#2b2d31;border-top:4px solid {color};text-align:center">'
             "<h2>YouTube 會員驗證</h2>"
-            f"<p style=\"line-height:1.6\">{message}</p></div></body></html>"
+            f"<p style=\"line-height:1.6\">{safe_message}</p></div></body></html>"
         )
         return web.Response(text=html, content_type="text/html")
