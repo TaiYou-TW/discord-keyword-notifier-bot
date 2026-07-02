@@ -448,6 +448,13 @@ class MembershipMixin:
             status, reason = await self._probe_comment_thread(
                 session, video_id, access_token
             )
+            logger.info(
+                "Membership probe: channel=%s video=%s -> HTTP %s %s",
+                yt_channel_id,
+                video_id,
+                status,
+                reason or "",
+            )
             results.append((status, reason))
             if status == 200:
                 break
