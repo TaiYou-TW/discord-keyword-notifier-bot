@@ -60,13 +60,17 @@ MEMBERSHIP_SCHEMA = """
     )
 """
 
-# Admin-managed channel -> role mappings (one role per YouTube channel).
+# Admin-managed channel -> role mappings, per guild (one role per channel per
+# guild). The same YouTube channel can map to different roles in different
+# servers, so the bot can serve multiple guilds from one instance.
 MEMBERSHIP_CHANNELS_SCHEMA = """
     CREATE TABLE IF NOT EXISTS membership_channels (
-        yt_channel_id TEXT PRIMARY KEY,
+        guild_id INTEGER NOT NULL,
+        yt_channel_id TEXT NOT NULL,
         role_id INTEGER NOT NULL,
         added_by INTEGER,
-        created_at INTEGER
+        created_at INTEGER,
+        PRIMARY KEY (guild_id, yt_channel_id)
     )
 """
 
@@ -101,54 +105,92 @@ class MembershipMixin:
 
     @property
     def membership_enabled(self) -> bool:
-        # The OAuth infrastructure is available once credentials + guild + key
-        # are set; channel->role mappings are added by admins at runtime.
+        # The OAuth infrastructure is available once credentials + key are set;
+        # channel->role mappings (per guild) are added by admins at runtime.
         return bool(
             GOOGLE_OAUTH_CLIENT_ID
             and GOOGLE_OAUTH_CLIENT_SECRET
             and GOOGLE_OAUTH_REDIRECT_URI
-            and MEMBERSHIP_GUILD_ID
             and self._fernet is not None
         )
 
     def ensure_membership_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(MEMBERSHIP_SCHEMA)
-        conn.execute(MEMBERSHIP_CHANNELS_SCHEMA)
+        # Migrate an older single-guild membership_channels table (no guild_id)
+        # by backfilling the legacy MEMBERSHIP_GUILD_ID.
+        cols = [
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(membership_channels)"
+            ).fetchall()
+        ]
+        if cols and "guild_id" not in cols:
+            backfill = MEMBERSHIP_GUILD_ID or 0
+            logger.info(
+                "Migrating membership_channels to per-guild schema "
+                "(backfilling guild_id=%s)...",
+                backfill,
+            )
+            conn.execute(
+                "ALTER TABLE membership_channels RENAME TO membership_channels_legacy"
+            )
+            conn.execute(MEMBERSHIP_CHANNELS_SCHEMA)
+            conn.execute(
+                """
+                INSERT INTO membership_channels
+                    (guild_id, yt_channel_id, role_id, added_by, created_at)
+                SELECT ?, yt_channel_id, role_id, added_by, created_at
+                FROM membership_channels_legacy
+                """,
+                (backfill,),
+            )
+            conn.execute("DROP TABLE membership_channels_legacy")
+            logger.info("membership_channels migration complete.")
+        else:
+            conn.execute(MEMBERSHIP_CHANNELS_SCHEMA)
 
     # ---- channel -> role mappings (admin-managed) ----------------------------
 
     def load_membership_channels(self) -> None:
-        """Load channel->role mappings from the DB into memory."""
+        """Load per-guild channel->role mappings from the DB into memory."""
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            "SELECT yt_channel_id, role_id FROM membership_channels"
+            "SELECT guild_id, yt_channel_id, role_id FROM membership_channels"
         ).fetchall()
         conn.close()
-        self.membership_channel_map = [(ch, role_id) for ch, role_id in rows]
-        logger.info("Loaded %d membership channel mapping(s)", len(self.membership_channel_map))
+        # [ (guild_id, yt_channel_id, role_id), ... ]
+        self.membership_channel_map = [
+            (guild_id, ch, role_id) for guild_id, ch, role_id in rows
+        ]
+        logger.info(
+            "Loaded %d membership channel mapping(s)",
+            len(self.membership_channel_map),
+        )
 
     def add_membership_channel(
-        self, yt_channel_id: str, role_id: int, added_by: int
+        self, guild_id: int, yt_channel_id: str, role_id: int, added_by: int
     ) -> None:
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
-            INSERT INTO membership_channels (yt_channel_id, role_id, added_by, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(yt_channel_id) DO UPDATE SET
+            INSERT INTO membership_channels
+                (guild_id, yt_channel_id, role_id, added_by, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, yt_channel_id) DO UPDATE SET
                 role_id = excluded.role_id,
                 added_by = excluded.added_by
             """,
-            (yt_channel_id, role_id, added_by, int(time.time())),
+            (guild_id, yt_channel_id, role_id, added_by, int(time.time())),
         )
         conn.commit()
         conn.close()
         self.load_membership_channels()
 
-    def remove_membership_channel(self, yt_channel_id: str) -> bool:
+    def remove_membership_channel(self, guild_id: int, yt_channel_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         cur = conn.execute(
-            "DELETE FROM membership_channels WHERE yt_channel_id=?", (yt_channel_id,)
+            "DELETE FROM membership_channels WHERE guild_id=? AND yt_channel_id=?",
+            (guild_id, yt_channel_id),
         )
         removed = cur.rowcount > 0
         conn.commit()
@@ -413,14 +455,14 @@ class MembershipMixin:
     # ---- Discord role sync ---------------------------------------------------
 
     async def apply_member_role(
-        self, discord_user_id: int, role_id: int, is_member: bool
+        self, discord_user_id: int, guild_id: int, role_id: int, is_member: bool
     ) -> None:
-        guild = self.get_guild(MEMBERSHIP_GUILD_ID)
+        guild = self.get_guild(guild_id)
         role = guild.get_role(role_id) if guild else None
         if guild is None or role is None:
             logger.warning(
                 "Membership guild/role not found (guild=%s role=%s)",
-                MEMBERSHIP_GUILD_ID,
+                guild_id,
                 role_id,
             )
             return
@@ -507,15 +549,26 @@ class MembershipMixin:
     ) -> dict:
         """Check every configured channel with one token and sync each role.
 
-        Returns {yt_channel_id: True | False | None}. None (inconclusive) leaves
-        that channel's role untouched.
+        Returns {(guild_id, yt_channel_id): True | False | None}. None
+        (inconclusive) leaves that mapping's role untouched.
         """
-        results: dict[str, bool | None] = {}
-        for yt_channel_id, role_id in self.membership_channel_map:
-            is_member = await self.check_is_member(session, access_token, yt_channel_id)
-            results[yt_channel_id] = is_member
+        results: dict[tuple[int, str], bool | None] = {}
+        # A channel's membership result is guild-independent, so probe each
+        # distinct channel only once even if it's mapped in several guilds.
+        channel_cache: dict[str, bool | None] = {}
+        for guild_id, yt_channel_id, role_id in self.membership_channel_map:
+            if yt_channel_id in channel_cache:
+                is_member = channel_cache[yt_channel_id]
+            else:
+                is_member = await self.check_is_member(
+                    session, access_token, yt_channel_id
+                )
+                channel_cache[yt_channel_id] = is_member
+            results[(guild_id, yt_channel_id)] = is_member
             if is_member is not None:
-                await self.apply_member_role(discord_user_id, role_id, is_member)
+                await self.apply_member_role(
+                    discord_user_id, guild_id, role_id, is_member
+                )
         self._touch_last_checked(discord_user_id)
         return results
 
@@ -529,8 +582,10 @@ class MembershipMixin:
                     "Membership authorization revoked for %d; removing roles/record",
                     discord_user_id,
                 )
-                for _ch, role_id in self.membership_channel_map:
-                    await self.apply_member_role(discord_user_id, role_id, False)
+                for guild_id, _ch, role_id in self.membership_channel_map:
+                    await self.apply_member_role(
+                        discord_user_id, guild_id, role_id, False
+                    )
                 self._delete_membership(discord_user_id)
             return None
         return await self.check_all_channels(session, discord_user_id, access_token)
@@ -545,8 +600,8 @@ class MembershipMixin:
                 await self.revoke_token(session, refresh_token)
         except Exception:
             logger.exception("Error revoking token during unlink for %d", discord_user_id)
-        for _ch, role_id in self.membership_channel_map:
-            await self.apply_member_role(discord_user_id, role_id, False)
+        for guild_id, _ch, role_id in self.membership_channel_map:
+            await self.apply_member_role(discord_user_id, guild_id, role_id, False)
         self._delete_membership(discord_user_id)
         return True
 
