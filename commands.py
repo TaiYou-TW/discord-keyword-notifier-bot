@@ -7,7 +7,6 @@ from config import (
     DEFAULT_COOLDOWN,
     logger,
     ADMIN_USER_IDS,
-    MEMBERSHIP_GUILD_ID,
 )
 
 
@@ -985,33 +984,44 @@ async def membership_status(interaction: discord.Interaction):
     _, _yt_channel_id, _, last_checked = row
     checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
 
-    if not bot.membership_channel_map:
+    guild = interaction.guild
+    if guild is None:
         await interaction.followup.send(
-            f"已連結你的 YouTube 帳號，但管理員尚未設定任何驗證頻道。\n最後檢查：{checked}",
+            "請在伺服器中使用此指令以查看該伺服器的驗證狀態。", ephemeral=True
+        )
+        return
+
+    mappings = [
+        (ch, role_id)
+        for gid, ch, role_id in bot.membership_channel_map
+        if gid == guild.id
+    ]
+    if not mappings:
+        await interaction.followup.send(
+            f"已連結你的 YouTube 帳號，但本伺服器尚未設定任何驗證頻道。\n最後檢查：{checked}",
             ephemeral=True,
         )
         return
 
     # Report per-channel status from the member's actual roles (source of truth).
-    guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
-    member = None
-    if guild:
-        member = guild.get_member(interaction.user.id)
-        if member is None:
-            try:
-                member = await guild.fetch_member(interaction.user.id)
-            except Exception:
-                member = None
+    member = guild.get_member(interaction.user.id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(interaction.user.id)
+        except Exception:
+            member = None
 
     lines = []
-    for ch, role_id in bot.membership_channel_map:
+    for ch, role_id in mappings:
         has_role = bool(member) and any(r.id == role_id for r in member.roles)
-        role = guild.get_role(role_id) if guild else None
+        role = guild.get_role(role_id)
         role_name = role.name if role else f"@{role_id}"
         lines.append(f"{'✅' if has_role else '❌'} `{ch}` → {role_name}")
 
     await interaction.followup.send(
-        "你的 YouTube 會員驗證狀態：\n" + "\n".join(lines) + f"\n最後檢查：{checked}",
+        "你在本伺服器的 YouTube 會員驗證狀態：\n"
+        + "\n".join(lines)
+        + f"\n最後檢查：{checked}",
         ephemeral=True,
     )
 
@@ -1091,15 +1101,21 @@ async def membership_add(
         )
         return
 
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
+
     channel_id = channel_id.strip()
     if not channel_id.startswith("UC") or len(channel_id) < 20:
         await interaction.response.send_message(
             "❌ 頻道 ID 格式錯誤，需為 `UC` 開頭的頻道 ID。", ephemeral=True
         )
         return
-    if role.guild.id != MEMBERSHIP_GUILD_ID:
+    if role.guild.id != interaction.guild.id:
         await interaction.response.send_message(
-            "❌ 該身分組不在已設定的會員驗證伺服器中。", ephemeral=True
+            "❌ 該身分組不屬於這個伺服器。", ephemeral=True
         )
         return
     if role.is_default() or role.managed:
@@ -1108,9 +1124,11 @@ async def membership_add(
         )
         return
 
-    bot.add_membership_channel(channel_id, role.id, interaction.user.id)
+    bot.add_membership_channel(
+        interaction.guild.id, channel_id, role.id, interaction.user.id
+    )
     await interaction.response.send_message(
-        f"✅ 已設定：`{channel_id}` → {role.mention}\n"
+        f"✅ 已在本伺服器設定：`{channel_id}` → {role.mention}\n"
         "新設定會在下次自動重新驗證時套用，或使用 `/membership_recheck` 立即套用。",
         ephemeral=True,
     )
@@ -1134,11 +1152,16 @@ async def membership_remove(interaction: discord.Interaction, channel_id: str):
             "❌ 此命令僅限管理員使用！", ephemeral=True
         )
         return
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
 
-    removed = bot.remove_membership_channel(channel_id.strip())
+    removed = bot.remove_membership_channel(interaction.guild.id, channel_id.strip())
     if removed:
         await interaction.response.send_message(
-            f"✅ 已移除頻道 `{channel_id.strip()}` 的對應。"
+            f"✅ 已移除本伺服器頻道 `{channel_id.strip()}` 的對應。"
             "（現有成員的身分組會在下次重新驗證時同步。）",
             ephemeral=True,
         )
@@ -1163,17 +1186,27 @@ async def membership_list(interaction: discord.Interaction):
             "❌ 此命令僅限管理員使用！", ephemeral=True
         )
         return
-
-    if not bot.membership_channel_map:
+    if interaction.guild is None:
         await interaction.response.send_message(
-            "尚未設定任何頻道對應，使用 `/membership_add` 新增。", ephemeral=True
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
         )
         return
 
-    guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
+    guild = interaction.guild
+    mappings = [
+        (ch, role_id)
+        for gid, ch, role_id in bot.membership_channel_map
+        if gid == guild.id
+    ]
+    if not mappings:
+        await interaction.response.send_message(
+            "本伺服器尚未設定任何頻道對應，使用 `/membership_add` 新增。", ephemeral=True
+        )
+        return
+
     lines = []
-    for ch, role_id in bot.membership_channel_map:
-        role = guild.get_role(role_id) if guild else None
+    for ch, role_id in mappings:
+        role = guild.get_role(role_id)
         lines.append(f"- `{ch}` → {role.mention if role else f'@{role_id}（找不到）'}")
     await interaction.response.send_message(
         "目前的會員驗證頻道對應：\n" + "\n".join(lines), ephemeral=True

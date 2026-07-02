@@ -5,6 +5,9 @@ services:
     restart: on-failure
     ports:
       - ${YT_API_EXPOSED_HTTP_PORT:-8080}:80
+    # Set Apache's ServerName to silence the AH00558 FQDN warning on startup.
+    volumes:
+      - ./deploy/apache-servername.conf:/etc/apache2/conf-enabled/servername.conf:ro
 
   keyword-notifier:
     build: .

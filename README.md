@@ -146,9 +146,10 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 4. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
    （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。
 
-**同一伺服器多頻道**：由於授權是「以使用者為單位」（非以頻道為單位），成員只需 `/verify_membership` **授權一次**，
-Bot 會用同一個權杖檢查所有已設定頻道，並授予其符合資格的所有身分組。頻道與身分組的對應由管理員以指令即時管理
-（`/membership_add`、`/membership_remove`、`/membership_list`），存於資料庫，無需改設定或重啟。
+**多頻道、多伺服器**：由於授權是「以使用者為單位」（非以頻道、也非以伺服器為單位），成員只需 `/verify_membership`
+**授權一次**，Bot 就會用同一個權杖檢查所有已設定頻道，並在**每一個**設有對應且該成員符合資格的伺服器授予對應身分組。
+對應由各伺服器的管理員在自己的伺服器內以指令即時管理（`/membership_add`、`/membership_remove`、`/membership_list`），
+每筆對應會記錄其所屬伺服器，存於資料庫（可跨多個伺服器，同一個頻道在不同伺服器可對應不同身分組），無需改設定或重啟。
 
 ### 設定步驟
 
@@ -160,10 +161,10 @@ Bot 會用同一個權杖檢查所有已設定頻道，並授予其符合資格�
    由回呼伺服器一併提供，網址為 `https://你的網域/privacy.html` 與 `/terms.html`。**發布前請替換檔內所有 `[方括號]` 欄位。**
 3. **反向代理**：將 `GOOGLE_OAUTH_REDIRECT_URI`（HTTPS）代理到容器的 `MEMBERSHIP_OAUTH_PORT`（預設 8081）。
    可直接使用範例設定 [`deploy/nginx-membership.conf.example`](deploy/nginx-membership.conf.example)（含 TLS 與 certbot 說明）。docker-compose 預設將此埠綁定在 `127.0.0.1`，僅供本機 nginx 存取。
-4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_GUILD_ID`、
-   `MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），建議另設 `YOUTUBE_API_KEY`
-   以穩定列出會限播放清單。詳見 `.env.example`。
-5. 啟動後由管理員以 `/membership_add <channel_id> <role>` 建立頻道與身分組的對應（可多個）。
+4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_TOKEN_ENC_KEY`
+   （用 `cryptography.fernet` 產生），建議另設 `YOUTUBE_API_KEY` 以穩定列出會限播放清單。
+   `MEMBERSHIP_GUILD_ID` 現為選用（僅用於自舊版單一伺服器設定升級時的資料轉移）。詳見 `.env.example`。
+5. 啟動後由各伺服器管理員在該伺服器內以 `/membership_add <channel_id> <role>` 建立頻道與身分組的對應（可多個、可跨多個伺服器）。
 
 ### 注意事項
 
