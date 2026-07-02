@@ -103,6 +103,9 @@ MEMBERSHIP_OAUTH_SCOPE = os.getenv(
 MEMBERSHIP_OAUTH_HOST = os.getenv("MEMBERSHIP_OAUTH_HOST", "0.0.0.0")
 MEMBERSHIP_OAUTH_PORT = int(os.getenv("MEMBERSHIP_OAUTH_PORT", "8081"))
 
+# Optional / legacy: only used to backfill the guild when migrating an older
+# single-guild membership_channels table. The bot serves any guild it's in;
+# mappings carry their own guild id (set when an admin runs /membership_add).
 MEMBERSHIP_GUILD_ID = os.getenv("MEMBERSHIP_GUILD_ID")
 MEMBERSHIP_GUILD_ID = int(MEMBERSHIP_GUILD_ID) if MEMBERSHIP_GUILD_ID else None
 # Channel -> role mappings are managed at runtime by admins via the
