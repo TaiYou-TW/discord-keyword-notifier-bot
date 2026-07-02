@@ -144,7 +144,7 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 2. 授權後 Bot 儲存其 refresh token（以 Fernet 加密）。
 3. 以該成員的權杖對頻道**會限影片**呼叫 `commentThreads.list`：`200`＝會員、`403`＝非會員。
 4. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
-   （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。單一頻道時也可用 `MEMBERSHIP_PROBE_VIDEO_IDS` 手動指定。
+   （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。
 
 **同一伺服器多頻道**：由於授權是「以使用者為單位」（非以頻道為單位），成員只需 `/verify_membership` **授權一次**，
 Bot 會用同一個權杖檢查所有已設定頻道，並授予其符合資格的所有身分組。頻道與身分組的對應由管理員以指令即時管理
