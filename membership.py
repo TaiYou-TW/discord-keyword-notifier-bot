@@ -639,6 +639,10 @@ class MembershipMixin:
         app = web.Application()
         app.router.add_get("/oauth/callback", self._handle_oauth_callback)
         app.router.add_get("/healthz", self._handle_healthz)
+        # Home page (explains the app; used as the Google consent-screen home URL).
+        app.router.add_get("/", self._handle_home)
+        app.router.add_get("/index.html", self._handle_home)
+        app.router.add_get("/home.html", self._handle_home)
         # Privacy policy / terms served on the same host (handy for the Google
         # consent screen, and works even in a tunnel-only setup with no nginx).
         app.router.add_get("/privacy.html", self._handle_privacy)
@@ -653,6 +657,9 @@ class MembershipMixin:
             MEMBERSHIP_OAUTH_HOST,
             MEMBERSHIP_OAUTH_PORT,
         )
+
+    async def _handle_home(self, request: web.Request) -> web.Response:
+        return self._serve_static_file("home.html")
 
     async def _handle_healthz(self, request: web.Request) -> web.Response:
         return web.Response(text="ok")

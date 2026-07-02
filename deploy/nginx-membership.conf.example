@@ -60,13 +60,16 @@ server {
         access_log off;
     }
 
-    # Privacy policy / terms (the bot serves these; needed for Google consent).
-    location = /privacy.html { proxy_pass http://127.0.0.1:8081; }
-    location = /terms.html   { proxy_pass http://127.0.0.1:8081; }
-
-    # Nothing else is served on this host.
+    # Home page (/), privacy policy and terms — the bot serves these; the home
+    # page and privacy URL are required for Google OAuth verification.
+    # The bot returns 404 for any path it doesn't recognise.
     location / {
-        return 404;
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 
