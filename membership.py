@@ -29,13 +29,11 @@ from config import (
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
     GOOGLE_OAUTH_REDIRECT_URI,
-    MEMBERSHIP_CHANNELS,
     MEMBERSHIP_CHECK_INTERVAL,
     MEMBERSHIP_GUILD_ID,
     MEMBERSHIP_OAUTH_HOST,
     MEMBERSHIP_OAUTH_PORT,
     MEMBERSHIP_OAUTH_SCOPE,
-    MEMBERSHIP_PROBE_VIDEO_IDS,
     MEMBERSHIP_SUCCESS_REDIRECT,
     MEMBERSHIP_TOKEN_ENC_KEY,
     YOUTUBE_API_KEY,
@@ -58,6 +56,16 @@ MEMBERSHIP_SCHEMA = """
         youtube_channel_id TEXT,
         refresh_token_enc TEXT NOT NULL,
         last_checked INTEGER,
+        created_at INTEGER
+    )
+"""
+
+# Admin-managed channel -> role mappings (one role per YouTube channel).
+MEMBERSHIP_CHANNELS_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS membership_channels (
+        yt_channel_id TEXT PRIMARY KEY,
+        role_id INTEGER NOT NULL,
+        added_by INTEGER,
         created_at INTEGER
     )
 """
@@ -93,17 +101,61 @@ class MembershipMixin:
 
     @property
     def membership_enabled(self) -> bool:
+        # The OAuth infrastructure is available once credentials + guild + key
+        # are set; channel->role mappings are added by admins at runtime.
         return bool(
             GOOGLE_OAUTH_CLIENT_ID
             and GOOGLE_OAUTH_CLIENT_SECRET
             and GOOGLE_OAUTH_REDIRECT_URI
             and MEMBERSHIP_GUILD_ID
-            and MEMBERSHIP_CHANNELS
             and self._fernet is not None
         )
 
     def ensure_membership_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(MEMBERSHIP_SCHEMA)
+        conn.execute(MEMBERSHIP_CHANNELS_SCHEMA)
+
+    # ---- channel -> role mappings (admin-managed) ----------------------------
+
+    def load_membership_channels(self) -> None:
+        """Load channel->role mappings from the DB into memory."""
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT yt_channel_id, role_id FROM membership_channels"
+        ).fetchall()
+        conn.close()
+        self.membership_channel_map = [(ch, role_id) for ch, role_id in rows]
+        logger.info("Loaded %d membership channel mapping(s)", len(self.membership_channel_map))
+
+    def add_membership_channel(
+        self, yt_channel_id: str, role_id: int, added_by: int
+    ) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO membership_channels (yt_channel_id, role_id, added_by, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(yt_channel_id) DO UPDATE SET
+                role_id = excluded.role_id,
+                added_by = excluded.added_by
+            """,
+            (yt_channel_id, role_id, added_by, int(time.time())),
+        )
+        conn.commit()
+        conn.close()
+        self.load_membership_channels()
+
+    def remove_membership_channel(self, yt_channel_id: str) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.execute(
+            "DELETE FROM membership_channels WHERE yt_channel_id=?", (yt_channel_id,)
+        )
+        removed = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        if removed:
+            self.load_membership_channels()
+        return removed
 
     # ---- refresh-token encryption at rest ------------------------------------
 
@@ -303,9 +355,6 @@ class MembershipMixin:
         yt_channel_id: str,
         access_token: str | None = None,
     ) -> list[str]:
-        # Manual override only makes sense when a single channel is configured.
-        if MEMBERSHIP_PROBE_VIDEO_IDS and len(MEMBERSHIP_CHANNELS) == 1:
-            return MEMBERSHIP_PROBE_VIDEO_IDS
         now = int(time.time())
         cached = self._probe_cache.get(yt_channel_id)
         if cached and now - cached["ts"] < PROBE_CACHE_TTL:
@@ -463,7 +512,7 @@ class MembershipMixin:
         that channel's role untouched.
         """
         results: dict[str, bool | None] = {}
-        for yt_channel_id, role_id in MEMBERSHIP_CHANNELS.items():
+        for yt_channel_id, role_id in self.membership_channel_map:
             is_member = await self.check_is_member(session, access_token, yt_channel_id)
             results[yt_channel_id] = is_member
             if is_member is not None:
@@ -481,7 +530,7 @@ class MembershipMixin:
                     "Membership authorization revoked for %d; removing roles/record",
                     discord_user_id,
                 )
-                for role_id in MEMBERSHIP_CHANNELS.values():
+                for _ch, role_id in self.membership_channel_map:
                     await self.apply_member_role(discord_user_id, role_id, False)
                 self._delete_membership(discord_user_id)
             return None
@@ -497,7 +546,7 @@ class MembershipMixin:
                 await self.revoke_token(session, refresh_token)
         except Exception:
             logger.exception("Error revoking token during unlink for %d", discord_user_id)
-        for role_id in MEMBERSHIP_CHANNELS.values():
+        for _ch, role_id in self.membership_channel_map:
             await self.apply_member_role(discord_user_id, role_id, False)
         self._delete_membership(discord_user_id)
         return True
@@ -605,7 +654,7 @@ class MembershipMixin:
             )
 
         granted = sum(1 for ok in results.values() if ok)
-        total = len(MEMBERSHIP_CHANNELS)
+        total = len(self.membership_channel_map)
         if granted:
             logger.info(
                 "Membership verified for %d: %d/%d channel(s)",

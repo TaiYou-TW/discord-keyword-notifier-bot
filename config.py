@@ -105,41 +105,11 @@ MEMBERSHIP_OAUTH_PORT = int(os.getenv("MEMBERSHIP_OAUTH_PORT", "8081"))
 
 MEMBERSHIP_GUILD_ID = os.getenv("MEMBERSHIP_GUILD_ID")
 MEMBERSHIP_GUILD_ID = int(MEMBERSHIP_GUILD_ID) if MEMBERSHIP_GUILD_ID else None
-MEMBERSHIP_ROLE_ID = os.getenv("MEMBERSHIP_ROLE_ID")
-MEMBERSHIP_ROLE_ID = int(MEMBERSHIP_ROLE_ID) if MEMBERSHIP_ROLE_ID else None
+# Channel -> role mappings are managed at runtime by admins via the
+# /membership_add, /membership_remove and /membership_list commands and stored
+# in the database (table membership_channels), not in env. Members-only probe
+# videos are always auto-discovered from each channel's UUMO uploads playlist.
 
-# Target channel to verify membership for (UC... id). The members-only uploads
-# playlist is derived from it (UC... -> UUMO...).
-MEMBERSHIP_YT_CHANNEL_ID = os.getenv("MEMBERSHIP_YT_CHANNEL_ID", "")
-
-
-# Multiple channels -> roles within one guild, e.g. "UCaaa:roleid1,UCbbb:roleid2".
-# A user authorizes ONCE; the bot then checks every channel with their token and
-# grants each role they qualify for. Falls back to the single
-# MEMBERSHIP_YT_CHANNEL_ID/MEMBERSHIP_ROLE_ID pair above when unset.
-def _parse_membership_channels() -> dict:
-    mapping: dict[str, int] = {}
-    for item in os.getenv("MEMBERSHIP_CHANNELS", "").split(","):
-        item = item.strip()
-        if not item or ":" not in item:
-            continue
-        channel, _, role = item.partition(":")
-        channel, role = channel.strip(), role.strip()
-        if channel.startswith("UC") and role.isdigit():
-            mapping[channel] = int(role)
-    if not mapping and MEMBERSHIP_YT_CHANNEL_ID and MEMBERSHIP_ROLE_ID:
-        mapping[MEMBERSHIP_YT_CHANNEL_ID] = MEMBERSHIP_ROLE_ID
-    return mapping
-
-
-MEMBERSHIP_CHANNELS = _parse_membership_channels()  # {yt_channel_id: role_id}
-# Optional manual override of members-only probe video ids (CSV). When empty,
-# they are auto-discovered from the UUMO members-only uploads playlist.
-MEMBERSHIP_PROBE_VIDEO_IDS = [
-    v.strip()
-    for v in os.getenv("MEMBERSHIP_PROBE_VIDEO_IDS", "").split(",")
-    if v.strip()
-]
 # Optional YouTube Data API key used to list the members-only playlist without
 # depending on a member's token. Recommended for reliable auto-discovery.
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")

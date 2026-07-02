@@ -29,6 +29,9 @@ docker compose up --build
 - `/verify_membership`：連結 YouTube 帳號驗證頻道會員資格並取得會員身分組
 - `/membership_status`：查看自己的會員驗證狀態
 - `/membership_unlink`：解除連結並移除會員身分組
+- `/membership_add <channel_id> <role>`：新增頻道與身分組對應（管理員專用）
+- `/membership_remove <channel_id>`：移除頻道對應（管理員專用）
+- `/membership_list`：列出所有頻道對應（管理員專用）
 - `/membership_recheck`：立即重新驗證所有成員（管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
@@ -144,8 +147,8 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
    （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。單一頻道時也可用 `MEMBERSHIP_PROBE_VIDEO_IDS` 手動指定。
 
 **同一伺服器多頻道**：由於授權是「以使用者為單位」（非以頻道為單位），成員只需 `/verify_membership` **授權一次**，
-Bot 會用同一個權杖檢查 `MEMBERSHIP_CHANNELS` 中的每個頻道，並授予其符合資格的所有身分組。以
-`UC頻道:身分組ID` 逗號分隔設定，例如 `MEMBERSHIP_CHANNELS=UCaaa:111,UCbbb:222`。
+Bot 會用同一個權杖檢查所有已設定頻道，並授予其符合資格的所有身分組。頻道與身分組的對應由管理員以指令即時管理
+（`/membership_add`、`/membership_remove`、`/membership_list`），存於資料庫，無需改設定或重啟。
 
 ### 設定步驟
 
@@ -158,9 +161,9 @@ Bot 會用同一個權杖檢查 `MEMBERSHIP_CHANNELS` 中的每個頻道，並�
 3. **反向代理**：將 `GOOGLE_OAUTH_REDIRECT_URI`（HTTPS）代理到容器的 `MEMBERSHIP_OAUTH_PORT`（預設 8081）。
    可直接使用範例設定 [`deploy/nginx-membership.conf.example`](deploy/nginx-membership.conf.example)（含 TLS 與 certbot 說明）。docker-compose 預設將此埠綁定在 `127.0.0.1`，僅供本機 nginx 存取。
 4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_GUILD_ID`、
-   `MEMBERSHIP_CHANNELS`（多頻道；單頻道可改用 `MEMBERSHIP_YT_CHANNEL_ID`＋`MEMBERSHIP_ROLE_ID`）、
-   `MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），
-   建議另設 `YOUTUBE_API_KEY` 以穩定列出會限播放清單。詳見 `.env.example`。
+   `MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），建議另設 `YOUTUBE_API_KEY`
+   以穩定列出會限播放清單。詳見 `.env.example`。
+5. 啟動後由管理員以 `/membership_add <channel_id> <role>` 建立頻道與身分組的對應（可多個）。
 
 ### 注意事項
 

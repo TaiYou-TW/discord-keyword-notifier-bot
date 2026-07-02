@@ -88,6 +88,7 @@ class MyBot(
         self._membership_runner = None
         self._fernet_cache = False  # sentinel: cipher not built yet
         self._probe_cache = {}  # { yt_channel_id: {"ids": [...], "ts": int} }
+        self.membership_channel_map = []  # [ (yt_channel_id, role_id), ... ]
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (
@@ -163,6 +164,7 @@ class MyBot(
         self.load_muted_channels()
         self.load_twitter_profile_data()
         self.load_youtube_community_data()
+        self.load_membership_channels()
 
         await self.tree.sync()
 
