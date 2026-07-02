@@ -452,6 +452,13 @@ class MembershipMixin:
             status, reason = await self._probe_comment_thread(
                 session, video_id, access_token
             )
+            logger.debug(
+                "Membership probe: channel=%s video=%s -> HTTP %s %s",
+                yt_channel_id,
+                video_id,
+                status,
+                reason or "",
+            )
             results.append((status, reason))
             if status == 200:
                 break
@@ -475,16 +482,53 @@ class MembershipMixin:
         if member is None:
             try:
                 member = await guild.fetch_member(discord_user_id)
-            except Exception:
+            except discord.NotFound:
+                logger.debug(
+                    "Membership: user %d is not in guild %s; cannot assign role %s",
+                    discord_user_id,
+                    guild_id,
+                    role_id,
+                )
+                return
+            except discord.Forbidden:
+                logger.warning(
+                    "Missing permission to fetch member %d in guild %s; cannot sync role %s",
+                    discord_user_id,
+                    guild_id,
+                    role_id,
+                )
+                return
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to fetch member %d in guild %s; cannot sync role %s",
+                    discord_user_id,
+                    guild_id,
+                    role_id,
+                )
                 return
         try:
             if is_member and role not in member.roles:
                 await member.add_roles(role, reason="YouTube membership verified")
+                logger.info(
+                    "Granted membership role %s to user %d in guild %s",
+                    role_id,
+                    discord_user_id,
+                    guild_id,
+                )
             elif not is_member and role in member.roles:
                 await member.remove_roles(role, reason="YouTube membership inactive")
+                logger.info(
+                    "Removed membership role %s from user %d in guild %s",
+                    role_id,
+                    discord_user_id,
+                    guild_id,
+                )
         except discord.Forbidden:
             logger.warning(
-                "Missing permission to manage role %s in guild %s", role.id, guild.id
+                "Missing permission to manage role %s in guild %s — ensure the bot "
+                "has Manage Roles and its highest role is ABOVE this role",
+                role_id,
+                guild_id,
             )
         except Exception:
             logger.exception("Failed to sync membership role for %d", discord_user_id)
@@ -570,6 +614,15 @@ class MembershipMixin:
                 )
                 channel_cache[yt_channel_id] = is_member
             results[(guild_id, yt_channel_id)] = is_member
+            logger.debug(
+                "Membership check: user=%d guild=%s channel=%s -> %s",
+                discord_user_id,
+                guild_id,
+                yt_channel_id,
+                "member"
+                if is_member
+                else ("not member" if is_member is False else "inconclusive"),
+            )
             if is_member is not None:
                 await self.apply_member_role(
                     discord_user_id, guild_id, role_id, is_member

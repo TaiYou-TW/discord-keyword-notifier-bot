@@ -140,7 +140,7 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 
 ### 運作原理
 
-1. 成員執行 `/verify_membership`，取得專屬 Google 授權連結（`youtube.readonly`）。
+1. 成員執行 `/verify_membership`，取得專屬 Google 授權連結（`youtube.force-ssl`；讀取會限影片留言需要此範圍，`youtube.readonly` 會回傳 403 insufficientPermissions）。
 2. 授權後 Bot 儲存其 refresh token（以 Fernet 加密）。
 3. 以該成員的權杖對頻道**會限影片**呼叫 `commentThreads.list`：`200`＝會員、`403`＝非會員。
 4. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
@@ -155,7 +155,7 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 
 1. **Google Cloud**：建立專案 → 啟用 *YouTube Data API v3* → 建立 OAuth 2.0「網頁應用程式」用戶端，
    將 `https://你的網域/oauth/callback` 加入授權重新導向 URI。
-2. **OAuth 同意畫面**：`youtube.readonly` 屬敏感範圍。對外開放需經 Google 驗證（需隱私權政策與網域，可能耗時數週）；
+2. **OAuth 同意畫面**：`youtube.force-ssl` 屬敏感範圍。對外開放需經 Google 驗證（需隱私權政策與網域，可能耗時數週）；
    或維持「測試」模式（上限 100 人，但 **refresh token 每 7 天失效**，成員需每週重新授權）。
    同意畫面所需的**應用程式首頁**、**隱私權政策**與**服務條款**頁面，Bot 已內建於 `static/`
    （`home.html` 說明用途、`privacy.html` 含 Google Limited Use 聲明），由回呼伺服器一併提供：
