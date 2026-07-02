@@ -448,7 +448,7 @@ class MembershipMixin:
             status, reason = await self._probe_comment_thread(
                 session, video_id, access_token
             )
-            logger.info(
+            logger.debug(
                 "Membership probe: channel=%s video=%s -> HTTP %s %s",
                 yt_channel_id,
                 video_id,
@@ -479,7 +479,7 @@ class MembershipMixin:
             try:
                 member = await guild.fetch_member(discord_user_id)
             except Exception:
-                logger.info(
+                logger.debug(
                     "Membership: user %d is not in guild %s; cannot assign role %s",
                     discord_user_id,
                     guild_id,
@@ -594,7 +594,7 @@ class MembershipMixin:
                 )
                 channel_cache[yt_channel_id] = is_member
             results[(guild_id, yt_channel_id)] = is_member
-            logger.info(
+            logger.debug(
                 "Membership check: user=%d guild=%s channel=%s -> %s",
                 discord_user_id,
                 guild_id,
