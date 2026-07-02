@@ -327,9 +327,10 @@ class MembershipMixin:
         self, session: aiohttp.ClientSession, refresh_token: str
     ) -> None:
         try:
-            await session.post(
+            async with session.post(
                 GOOGLE_REVOKE_URL, data={"token": refresh_token}, timeout=15
-            )
+            ) as resp:
+                await resp.read()  # drain + release the connection back to the pool
         except Exception:
             logger.exception("Token revoke request error")
 
