@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  Home page for Google OAuth verification. The app name below MUST match the
+  name on your Google OAuth consent screen: "BAUBAU Alert".
+  Replace [CONTACT_EMAIL] and [OPERATOR_NAME] before publishing.
+-->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BAUBAU Alert</title>
+<meta name="description" content="BAUBAU Alert is a Discord bot that delivers VTuber stream and keyword notifications and verifies YouTube channel membership to grant Discord roles.">
+<style>
+  body{font-family:system-ui,-apple-system,"Noto Sans TC",Segoe UI,sans-serif;line-height:1.7;color:#1a1a1a;background:#fafafa;margin:0}
+  .wrap{max-width:820px;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+  header{text-align:center;padding:1rem 0 1.5rem}
+  h1{font-size:2.2rem;margin:.2rem 0}
+  .tag{color:#555;font-size:1.05rem;margin:.2rem 0}
+  h2{font-size:1.25rem;margin:2rem 0 .5rem;padding-top:.6rem;border-top:1px solid #e5e5e5}
+  h3{font-size:1rem;margin:1.2rem 0 .3rem}
+  .muted{color:#666;font-size:.9rem}
+  .nav{margin:.6rem 0 1.5rem;text-align:center}
+  .nav a{color:#2563eb;text-decoration:none;margin:0 .6rem}
+  .card{background:#fff;border:1px solid #eee;border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0}
+  a{color:#2563eb}
+  code{background:#ededed;padding:.1rem .35rem;border-radius:4px;font-size:.9em}
+  ul{padding-left:1.25rem}
+  footer{margin-top:2.5rem;text-align:center}
+  @media(prefers-color-scheme:dark){body{background:#0f1115;color:#e5e7eb}.tag,.muted{color:#9ca3af}h2{border-color:#242424}.card{background:#1b1e24;border-color:#242424}code{background:#23262d}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>BAUBAU Alert</h1>
+    <p class="tag">VTuber 粉絲社群的 Discord 通知與會員驗證機器人<br>A Discord bot for VTuber fan communities.</p>
+    <div class="nav">
+      <a href="#en">English</a><a href="#zh">繁體中文</a>
+      <a href="/privacy.html">Privacy Policy</a><a href="/terms.html">Terms</a>
+    </div>
+  </header>
+
+  <!-- ============================ ENGLISH ============================ -->
+  <h2 id="en" lang="en">What BAUBAU Alert does</h2>
+  <p lang="en"><strong>BAUBAU Alert</strong> is a Discord bot for VTuber fan communities. It delivers notifications and can grant members-only Discord roles by verifying YouTube channel membership. It runs inside Discord servers that have added it; there is no separate consumer account or website login.</p>
+
+  <div class="card">
+    <h3>📣 Notifications</h3>
+    <ul>
+      <li>Keyword alerts — DMs you when a keyword you subscribed to appears in a channel.</li>
+      <li>Live-stream and video notifications for followed YouTube channels (via Holodex).</li>
+      <li>New posts from followed X (Twitter) profiles and YouTube community tabs.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>✅ YouTube membership verification (uses Google Sign-In)</h3>
+    <p>A server admin can link a YouTube channel to a Discord role. A member then clicks <code>/verify_membership</code> and signs in with Google, granting BAUBAU Alert <strong>read-only</strong> YouTube access (<code>youtube.readonly</code>).</p>
+    <p>BAUBAU Alert uses that access <strong>only</strong> to check whether the member can view the channel's members-only content — i.e. whether they are a paying channel member — and, if so, grants the matching Discord role. It re-checks periodically and removes the role when the membership ends.</p>
+    <p>It does <strong>not</strong> access your videos, watch history, subscriptions, or post/modify anything on your behalf. You can unlink anytime with <code>/membership_unlink</code> or at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google account permissions</a>. See our <a href="/privacy.html">Privacy Policy</a> for details, including our Google API Services Limited Use disclosure.</p>
+  </div>
+
+  <!-- ============================ 中文 ============================ -->
+  <h2 id="zh">BAUBAU Alert 的用途</h2>
+  <p><strong>BAUBAU Alert</strong> 是一個為 VTuber 粉絲社群打造的 Discord 機器人，提供各種通知，並可透過驗證 YouTube 頻道會員資格來授予 Discord 會限身分組。它運作於已將其加入的 Discord 伺服器中，沒有獨立的網站登入或消費者帳號。</p>
+
+  <div class="card">
+    <h3>📣 通知功能</h3>
+    <ul>
+      <li>關鍵字通知 — 當你訂閱的關鍵字出現在頻道時以私訊提醒你。</li>
+      <li>追蹤 YouTube 頻道的開台與新影片通知（透過 Holodex）。</li>
+      <li>追蹤的 X（Twitter）帳號與 YouTube 社群貼文的新貼文通知。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>✅ YouTube 會員驗證（使用 Google 登入）</h3>
+    <p>伺服器管理員可將某個 YouTube 頻道對應到一個 Discord 身分組。成員點選 <code>/verify_membership</code> 並以 Google 登入，授予 BAUBAU Alert <strong>唯讀</strong> 的 YouTube 存取權（<code>youtube.readonly</code>）。</p>
+    <p>BAUBAU Alert <strong>僅</strong>用此權限確認你能否觀看該頻道的會限內容（即你是否為付費會員），若是則授予對應的 Discord 身分組，並定期重新檢查，會員資格結束時移除身分組。</p>
+    <p>本服務<strong>不會</strong>存取你的影片、觀看紀錄、訂閱，也不會代你發布或修改任何內容。你可隨時以 <code>/membership_unlink</code> 或於 <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google 帳戶權限</a>解除連結。詳見<a href="/privacy.html">隱私權政策</a>（含 Google API 服務有限使用聲明）。</p>
+  </div>
+
+  <footer>
+    <p class="muted">聯絡方式 / Contact: <a href="mailto:[CONTACT_EMAIL]">[CONTACT_EMAIL]</a></p>
+    <p class="muted">© BAUBAU Alert · operated by [OPERATOR_NAME] · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  </footer>
+</div>
+</body>
+</html>
