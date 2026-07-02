@@ -157,10 +157,21 @@ class YouTubeCommunityMixin:
                             source,
                         )
                         continue
-                    payload = await resp.json()
+                    # content_type=None: parse even if the operational API sends
+                    # a non-JSON content-type; a bad/empty body raises ValueError.
+                    payload = await resp.json(content_type=None)
             except TimeoutError:
                 logger.warning(
                     "YT community API timed out for source %s",
+                    source,
+                )
+                continue
+            except ValueError:
+                # Empty or non-JSON body (JSONDecodeError subclasses ValueError).
+                # Benign and transient — log concisely, no traceback.
+                logger.warning(
+                    "YT community API returned an invalid/empty JSON body for "
+                    "source %s; skipping this cycle",
                     source,
                 )
                 continue
