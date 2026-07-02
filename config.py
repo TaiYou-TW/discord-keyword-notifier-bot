@@ -95,10 +95,11 @@ YT_MEMORY_LIMIT = int(os.getenv("YT_MEMORY_LIMIT", "2000"))
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "")
-# Least-privilege scope; enough to read comment threads. If members-only reads
-# get 403, switch to https://www.googleapis.com/auth/youtube.force-ssl
+# force-ssl is required to read members-only comment threads. youtube.readonly
+# returns HTTP 403 insufficientPermissions for members-only content, so it
+# can't verify membership. Overridable, but the default must be force-ssl.
 MEMBERSHIP_OAUTH_SCOPE = os.getenv(
-    "MEMBERSHIP_OAUTH_SCOPE", "https://www.googleapis.com/auth/youtube.readonly"
+    "MEMBERSHIP_OAUTH_SCOPE", "https://www.googleapis.com/auth/youtube.force-ssl"
 )
 MEMBERSHIP_OAUTH_HOST = os.getenv("MEMBERSHIP_OAUTH_HOST", "0.0.0.0")
 MEMBERSHIP_OAUTH_PORT = int(os.getenv("MEMBERSHIP_OAUTH_PORT", "8081"))
