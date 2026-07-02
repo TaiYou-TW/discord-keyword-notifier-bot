@@ -87,8 +87,7 @@ class MyBot(
         self.membership_monitor_task = None
         self._membership_runner = None
         self._fernet_cache = False  # sentinel: cipher not built yet
-        self._probe_cache = []
-        self._probe_cache_ts = 0
+        self._probe_cache = {}  # { yt_channel_id: {"ids": [...], "ts": int} }
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (

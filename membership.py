@@ -29,16 +29,15 @@ from config import (
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
     GOOGLE_OAUTH_REDIRECT_URI,
+    MEMBERSHIP_CHANNELS,
     MEMBERSHIP_CHECK_INTERVAL,
     MEMBERSHIP_GUILD_ID,
     MEMBERSHIP_OAUTH_HOST,
     MEMBERSHIP_OAUTH_PORT,
     MEMBERSHIP_OAUTH_SCOPE,
     MEMBERSHIP_PROBE_VIDEO_IDS,
-    MEMBERSHIP_ROLE_ID,
     MEMBERSHIP_SUCCESS_REDIRECT,
     MEMBERSHIP_TOKEN_ENC_KEY,
-    MEMBERSHIP_YT_CHANNEL_ID,
     YOUTUBE_API_KEY,
     logger,
 )
@@ -58,7 +57,6 @@ MEMBERSHIP_SCHEMA = """
         discord_user_id INTEGER PRIMARY KEY,
         youtube_channel_id TEXT,
         refresh_token_enc TEXT NOT NULL,
-        is_member INTEGER NOT NULL DEFAULT 0,
         last_checked INTEGER,
         created_at INTEGER
     )
@@ -100,8 +98,7 @@ class MembershipMixin:
             and GOOGLE_OAUTH_CLIENT_SECRET
             and GOOGLE_OAUTH_REDIRECT_URI
             and MEMBERSHIP_GUILD_ID
-            and MEMBERSHIP_ROLE_ID
-            and MEMBERSHIP_YT_CHANNEL_ID
+            and MEMBERSHIP_CHANNELS
             and self._fernet is not None
         )
 
@@ -301,23 +298,26 @@ class MembershipMixin:
             return []
 
     async def get_probe_video_ids(
-        self, session: aiohttp.ClientSession, access_token: str | None = None
+        self,
+        session: aiohttp.ClientSession,
+        yt_channel_id: str,
+        access_token: str | None = None,
     ) -> list[str]:
-        if MEMBERSHIP_PROBE_VIDEO_IDS:
+        # Manual override only makes sense when a single channel is configured.
+        if MEMBERSHIP_PROBE_VIDEO_IDS and len(MEMBERSHIP_CHANNELS) == 1:
             return MEMBERSHIP_PROBE_VIDEO_IDS
         now = int(time.time())
-        cache = getattr(self, "_probe_cache", [])
-        if cache and now - getattr(self, "_probe_cache_ts", 0) < PROBE_CACHE_TTL:
-            return cache
-        playlist_id = members_only_playlist_id(MEMBERSHIP_YT_CHANNEL_ID)
+        cached = self._probe_cache.get(yt_channel_id)
+        if cached and now - cached["ts"] < PROBE_CACHE_TTL:
+            return cached["ids"]
+        playlist_id = members_only_playlist_id(yt_channel_id)
         if not playlist_id:
-            return cache
+            return cached["ids"] if cached else []
         vids = await self._list_playlist_video_ids(session, playlist_id, access_token)
         if vids:
-            self._probe_cache = vids
-            self._probe_cache_ts = now
+            self._probe_cache[yt_channel_id] = {"ids": vids, "ts": now}
             return vids
-        return cache
+        return cached["ids"] if cached else []
 
     async def _probe_comment_thread(
         self, session: aiohttp.ClientSession, video_id: str, access_token: str
@@ -340,13 +340,16 @@ class MembershipMixin:
             return 0, "exception"
 
     async def check_is_member(
-        self, session: aiohttp.ClientSession, access_token: str
+        self, session: aiohttp.ClientSession, access_token: str, yt_channel_id: str
     ) -> bool | None:
-        probe_videos = await self.get_probe_video_ids(session, access_token)
+        probe_videos = await self.get_probe_video_ids(
+            session, yt_channel_id, access_token
+        )
         if not probe_videos:
             logger.warning(
-                "No members-only probe videos available (set YOUTUBE_API_KEY or "
-                "MEMBERSHIP_PROBE_VIDEO_IDS); cannot verify membership"
+                "No members-only probe videos for %s (set YOUTUBE_API_KEY or "
+                "MEMBERSHIP_PROBE_VIDEO_IDS); cannot verify",
+                yt_channel_id,
             )
             return None
         results: list[tuple[int, str]] = []
@@ -361,18 +364,16 @@ class MembershipMixin:
 
     # ---- Discord role sync ---------------------------------------------------
 
-    def _get_guild_and_role(self):
+    async def apply_member_role(
+        self, discord_user_id: int, role_id: int, is_member: bool
+    ) -> None:
         guild = self.get_guild(MEMBERSHIP_GUILD_ID)
-        role = guild.get_role(MEMBERSHIP_ROLE_ID) if guild else None
-        return guild, role
-
-    async def apply_member_role(self, discord_user_id: int, is_member: bool) -> None:
-        guild, role = self._get_guild_and_role()
+        role = guild.get_role(role_id) if guild else None
         if guild is None or role is None:
             logger.warning(
                 "Membership guild/role not found (guild=%s role=%s)",
                 MEMBERSHIP_GUILD_ID,
-                MEMBERSHIP_ROLE_ID,
+                role_id,
             )
             return
         member = guild.get_member(discord_user_id)
@@ -396,31 +397,30 @@ class MembershipMixin:
     # ---- storage -------------------------------------------------------------
 
     def store_membership(
-        self, discord_user_id: int, yt_channel_id: str | None, refresh_token: str, is_member: bool
+        self, discord_user_id: int, yt_channel_id: str | None, refresh_token: str
     ) -> None:
         now = int(time.time())
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
             INSERT INTO membership_oauth
-                (discord_user_id, youtube_channel_id, refresh_token_enc, is_member, last_checked, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (discord_user_id, youtube_channel_id, refresh_token_enc, last_checked, created_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(discord_user_id) DO UPDATE SET
                 youtube_channel_id = excluded.youtube_channel_id,
                 refresh_token_enc = excluded.refresh_token_enc,
-                is_member = excluded.is_member,
                 last_checked = excluded.last_checked
             """,
-            (discord_user_id, yt_channel_id, self._encrypt(refresh_token), int(is_member), now, now),
+            (discord_user_id, yt_channel_id, self._encrypt(refresh_token), now, now),
         )
         conn.commit()
         conn.close()
 
-    def _update_status(self, discord_user_id: int, is_member: bool) -> None:
+    def _touch_last_checked(self, discord_user_id: int) -> None:
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            "UPDATE membership_oauth SET is_member=?, last_checked=? WHERE discord_user_id=?",
-            (int(is_member), int(time.time()), discord_user_id),
+            "UPDATE membership_oauth SET last_checked=? WHERE discord_user_id=?",
+            (int(time.time()), discord_user_id),
         )
         conn.commit()
         conn.close()
@@ -428,7 +428,7 @@ class MembershipMixin:
     def get_membership_row(self, discord_user_id: int):
         conn = sqlite3.connect(self.db_path)
         row = conn.execute(
-            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, is_member, last_checked "
+            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, last_checked "
             "FROM membership_oauth WHERE discord_user_id=?",
             (discord_user_id,),
         ).fetchone()
@@ -438,7 +438,7 @@ class MembershipMixin:
     def _all_membership_rows(self):
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, is_member, last_checked "
+            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, last_checked "
             "FROM membership_oauth"
         ).fetchall()
         conn.close()
@@ -454,25 +454,38 @@ class MembershipMixin:
 
     # ---- verification orchestration ------------------------------------------
 
+    async def check_all_channels(
+        self, session: aiohttp.ClientSession, discord_user_id: int, access_token: str
+    ) -> dict:
+        """Check every configured channel with one token and sync each role.
+
+        Returns {yt_channel_id: True | False | None}. None (inconclusive) leaves
+        that channel's role untouched.
+        """
+        results: dict[str, bool | None] = {}
+        for yt_channel_id, role_id in MEMBERSHIP_CHANNELS.items():
+            is_member = await self.check_is_member(session, access_token, yt_channel_id)
+            results[yt_channel_id] = is_member
+            if is_member is not None:
+                await self.apply_member_role(discord_user_id, role_id, is_member)
+        self._touch_last_checked(discord_user_id)
+        return results
+
     async def verify_membership(
         self, session: aiohttp.ClientSession, discord_user_id: int, refresh_token: str
-    ) -> bool | None:
+    ) -> dict | None:
         access_token, revoked = await self.refresh_access_token(session, refresh_token)
         if access_token is None:
             if revoked:
                 logger.info(
-                    "Membership authorization revoked for %d; removing role/record",
+                    "Membership authorization revoked for %d; removing roles/record",
                     discord_user_id,
                 )
-                await self.apply_member_role(discord_user_id, False)
+                for role_id in MEMBERSHIP_CHANNELS.values():
+                    await self.apply_member_role(discord_user_id, role_id, False)
                 self._delete_membership(discord_user_id)
             return None
-        is_member = await self.check_is_member(session, access_token)
-        if is_member is None:
-            return None  # inconclusive; leave current state untouched
-        self._update_status(discord_user_id, is_member)
-        await self.apply_member_role(discord_user_id, is_member)
-        return is_member
+        return await self.check_all_channels(session, discord_user_id, access_token)
 
     async def unlink_membership(self, discord_user_id: int) -> bool:
         row = self.get_membership_row(discord_user_id)
@@ -484,7 +497,8 @@ class MembershipMixin:
                 await self.revoke_token(session, refresh_token)
         except Exception:
             logger.exception("Error revoking token during unlink for %d", discord_user_id)
-        await self.apply_member_role(discord_user_id, False)
+        for role_id in MEMBERSHIP_CHANNELS.values():
+            await self.apply_member_role(discord_user_id, role_id, False)
         self._delete_membership(discord_user_id)
         return True
 
@@ -494,7 +508,7 @@ class MembershipMixin:
             return
         logger.info("Re-checking membership for %d linked user(s)", len(rows))
         async with aiohttp.ClientSession() as session:
-            for discord_user_id, _yt, refresh_token_enc, _is_member, _last in rows:
+            for discord_user_id, _yt, refresh_token_enc, _last in rows:
                 try:
                     refresh_token = self._decrypt(refresh_token_enc)
                 except Exception:
@@ -583,25 +597,31 @@ class MembershipMixin:
                 if access_token
                 else None
             )
-            is_member = (
-                await self.check_is_member(session, access_token)
+            self.store_membership(discord_user_id, yt_channel_id, refresh_token)
+            results = (
+                await self.check_all_channels(session, discord_user_id, access_token)
                 if access_token
-                else None
-            )
-            self.store_membership(
-                discord_user_id, yt_channel_id, refresh_token, bool(is_member)
+                else {}
             )
 
-        if is_member:
-            await self.apply_member_role(discord_user_id, True)
-            logger.info("Membership verified for %d", discord_user_id)
-            return self._oauth_page(
-                "✅ 驗證成功，已授予會員身分組！你可以關閉此頁面。", ok=True
+        granted = sum(1 for ok in results.values() if ok)
+        total = len(MEMBERSHIP_CHANNELS)
+        if granted:
+            logger.info(
+                "Membership verified for %d: %d/%d channel(s)",
+                discord_user_id,
+                granted,
+                total,
             )
-        if is_member is False:
-            logger.info("Membership NOT active for %d", discord_user_id)
             return self._oauth_page(
-                "已連結你的 YouTube 帳號，但未偵測到此頻道的會員資格。", ok=False
+                f"✅ 驗證完成！已授予你符合資格的 {granted}/{total} 個頻道會員身分組。"
+                "你可以關閉此頁面。",
+                ok=True,
+            )
+        if results and all(v is False for v in results.values()):
+            logger.info("Membership NOT active for %d on any channel", discord_user_id)
+            return self._oauth_page(
+                "已連結你的 YouTube 帳號，但未偵測到任何設定頻道的會員資格。", ok=False
             )
         logger.info("Membership inconclusive for %d (will retry)", discord_user_id)
         return self._oauth_page(

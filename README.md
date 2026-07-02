@@ -141,7 +141,11 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 2. 授權後 Bot 儲存其 refresh token（以 Fernet 加密）。
 3. 以該成員的權杖對頻道**會限影片**呼叫 `commentThreads.list`：`200`＝會員、`403`＝非會員。
 4. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
-   （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。也可用 `MEMBERSHIP_PROBE_VIDEO_IDS` 手動指定。
+   （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。單一頻道時也可用 `MEMBERSHIP_PROBE_VIDEO_IDS` 手動指定。
+
+**同一伺服器多頻道**：由於授權是「以使用者為單位」（非以頻道為單位），成員只需 `/verify_membership` **授權一次**，
+Bot 會用同一個權杖檢查 `MEMBERSHIP_CHANNELS` 中的每個頻道，並授予其符合資格的所有身分組。以
+`UC頻道:身分組ID` 逗號分隔設定，例如 `MEMBERSHIP_CHANNELS=UCaaa:111,UCbbb:222`。
 
 ### 設定步驟
 
@@ -153,8 +157,9 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
    由回呼伺服器一併提供，網址為 `https://你的網域/privacy.html` 與 `/terms.html`。**發布前請替換檔內所有 `[方括號]` 欄位。**
 3. **反向代理**：將 `GOOGLE_OAUTH_REDIRECT_URI`（HTTPS）代理到容器的 `MEMBERSHIP_OAUTH_PORT`（預設 8081）。
    可直接使用範例設定 [`deploy/nginx-membership.conf.example`](deploy/nginx-membership.conf.example)（含 TLS 與 certbot 說明）。docker-compose 預設將此埠綁定在 `127.0.0.1`，僅供本機 nginx 存取。
-4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_GUILD_ID`、`MEMBERSHIP_ROLE_ID`、
-   `MEMBERSHIP_YT_CHANNEL_ID`、`MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），
+4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_GUILD_ID`、
+   `MEMBERSHIP_CHANNELS`（多頻道；單頻道可改用 `MEMBERSHIP_YT_CHANNEL_ID`＋`MEMBERSHIP_ROLE_ID`）、
+   `MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），
    建議另設 `YOUTUBE_API_KEY` 以穩定列出會限播放清單。詳見 `.env.example`。
 
 ### 注意事項

@@ -3,7 +3,13 @@ import discord
 from discord import app_commands
 
 from bot import bot
-from config import DEFAULT_COOLDOWN, logger, ADMIN_USER_IDS
+from config import (
+    DEFAULT_COOLDOWN,
+    logger,
+    ADMIN_USER_IDS,
+    MEMBERSHIP_CHANNELS,
+    MEMBERSHIP_GUILD_ID,
+)
 
 
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
@@ -977,13 +983,21 @@ async def membership_status(interaction: discord.Interaction):
         )
         return
 
-    _, yt_channel_id, _, is_member, last_checked = row
-    status = "✅ 會員" if is_member else "❌ 非會員 / 未確認"
+    _, _yt_channel_id, _, last_checked = row
     checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+
+    # Report per-channel status from the member's actual roles (source of truth).
+    guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
+    member = guild.get_member(interaction.user.id) if guild else None
+    lines = []
+    for ch, role_id in MEMBERSHIP_CHANNELS.items():
+        has_role = bool(member) and any(r.id == role_id for r in member.roles)
+        role = guild.get_role(role_id) if guild else None
+        role_name = role.name if role else f"@{role_id}"
+        lines.append(f"{'✅' if has_role else '❌'} `{ch}` → {role_name}")
+
     await interaction.followup.send(
-        f"YouTube 頻道：`{yt_channel_id or '未知'}`\n"
-        f"狀態：{status}\n"
-        f"最後檢查：{checked}",
+        "你的 YouTube 會員驗證狀態：\n" + "\n".join(lines) + f"\n最後檢查：{checked}",
         ephemeral=True,
     )
 
