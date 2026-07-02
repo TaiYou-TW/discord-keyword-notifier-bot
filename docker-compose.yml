@@ -17,6 +17,7 @@ services:
     # OAuth callback for YouTube membership verification. Bound to localhost so
     # only the host's nginx can reach it; nginx terminates TLS and proxies to
     # here at GOOGLE_OAUTH_REDIRECT_URI (see deploy/nginx-membership.conf.example).
+    ports:
       - 127.0.0.1:${MEMBERSHIP_OAUTH_EXPOSED_PORT:-8081}:${MEMBERSHIP_OAUTH_PORT:-8081}
     volumes:
       - .:/app
