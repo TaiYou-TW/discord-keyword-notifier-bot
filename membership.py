@@ -396,8 +396,7 @@ class MembershipMixin:
         )
         if not probe_videos:
             logger.warning(
-                "No members-only probe videos for %s (set YOUTUBE_API_KEY or "
-                "MEMBERSHIP_PROBE_VIDEO_IDS); cannot verify",
+                "No members-only probe videos for %s (set YOUTUBE_API_KEY for reliable auto-discovery); cannot verify",
                 yt_channel_id,
             )
             return None
