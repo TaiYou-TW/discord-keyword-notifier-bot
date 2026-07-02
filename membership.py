@@ -125,7 +125,11 @@ class MembershipMixin:
             ).fetchall()
         ]
         if cols and "guild_id" not in cols:
-            backfill = MEMBERSHIP_GUILD_ID or 0
+            if MEMBERSHIP_GUILD_ID is None:
+                raise RuntimeError(
+                    "Legacy membership_channels schema detected but MEMBERSHIP_GUILD_ID is not set; set MEMBERSHIP_GUILD_ID once to migrate existing mappings."
+                )
+            backfill = MEMBERSHIP_GUILD_ID
             logger.info(
                 "Migrating membership_channels to per-guild schema "
                 "(backfilling guild_id=%s)...",
