@@ -994,7 +994,15 @@ async def membership_status(interaction: discord.Interaction):
 
     # Report per-channel status from the member's actual roles (source of truth).
     guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
-    member = guild.get_member(interaction.user.id) if guild else None
+    member = None
+    if guild:
+        member = guild.get_member(interaction.user.id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(interaction.user.id)
+            except Exception:
+                member = None
+
     lines = []
     for ch, role_id in bot.membership_channel_map:
         has_role = bool(member) and any(r.id == role_id for r in member.roles)
