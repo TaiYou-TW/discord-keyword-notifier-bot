@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# nginx reverse proxy for the YouTube membership OAuth callback.
+#
+# Replace `membership.example.com` with your subdomain, and `8081` with your
+# MEMBERSHIP_OAUTH_EXPOSED_PORT if you changed it. Then set in .env:
+#     GOOGLE_OAUTH_REDIRECT_URI=https://membership.example.com/oauth/callback
+# and add that EXACT URI to your Google Cloud OAuth client's authorized
+# redirect URIs.
+#
+# Install: copy to /etc/nginx/sites-available/membership.example.com and symlink
+# into /etc/nginx/sites-enabled/ (or drop into /etc/nginx/conf.d/), then:
+#     sudo nginx -t && sudo systemctl reload nginx
+#
+# TLS: obtain a cert first (see "Getting the certificate" in the README /
+# comments below), otherwise the HTTPS block below fails to load.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# HTTP :80 — serve the ACME challenge and redirect everything else to HTTPS.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name membership.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS :443 — terminate TLS and proxy the OAuth callback to the bot.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name membership.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/membership.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/membership.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    # The bot's aiohttp callback server. docker-compose publishes it on
+    # 127.0.0.1:8081; keep the port in sync with MEMBERSHIP_OAUTH_EXPOSED_PORT.
+    location /oauth/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+    # Optional operator health check (proxied to the bot's /healthz).
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8081;
+        access_log off;
+    }
+
+    # Nothing else is served on this host.
+    location / {
+        return 404;
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Getting the certificate (Let's Encrypt / certbot)
+#
+# Easiest — let certbot manage nginx (needs a :80 server block for the name):
+#     sudo certbot --nginx -d membership.example.com
+#
+# Or webroot (keeps this file authoritative):
+#     sudo mkdir -p /var/www/certbot
+#     # deploy ONLY the :80 block above first, reload nginx, then:
+#     sudo certbot certonly --webroot -w /var/www/certbot -d membership.example.com
+#     # then enable the :443 block and reload.
+#
+# Renewal is automatic via the certbot systemd timer; reload nginx after renew:
+#     sudo certbot renew --post-hook "systemctl reload nginx"
+#
+# If nginx itself runs in a container (not on the host), drop the 127.0.0.1
+# binding in docker-compose.yml, put both services on a shared Docker network,
+# and change proxy_pass to http://keyword-notifier:8081.
+# ─────────────────────────────────────────────────────────────────────────────

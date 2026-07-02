@@ -14,11 +14,13 @@ services:
       - .env
     environment:
       YT_API_BASE_URL: http://youtube-operational-api
-    # OAuth callback for YouTube membership verification. Put a reverse proxy
-    # in front of this port to serve it over HTTPS at GOOGLE_OAUTH_REDIRECT_URI.
-    # (Internal port must match MEMBERSHIP_OAUTH_PORT, default 8081.)
+    # OAuth callback for YouTube membership verification. Bound to localhost so
+    # only the host's nginx can reach it; nginx terminates TLS and proxies to
+    # here at GOOGLE_OAUTH_REDIRECT_URI (see deploy/nginx-membership.conf.example).
+    # (Internal port must match MEMBERSHIP_OAUTH_PORT, default 8081. If nginx
+    # runs in a container instead, drop the 127.0.0.1 and share a network.)
     ports:
-      - ${MEMBERSHIP_OAUTH_EXPOSED_PORT:-8081}:8081
+      - 127.0.0.1:${MEMBERSHIP_OAUTH_EXPOSED_PORT:-8081}:8081
     volumes:
       - .:/app
     restart: unless-stopped

@@ -150,6 +150,7 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 2. **OAuth 同意畫面**：`youtube.readonly` 屬敏感範圍。對外開放需經 Google 驗證（需隱私權政策與網域，可能耗時數週）；
    或維持「測試」模式（上限 100 人，但 **refresh token 每 7 天失效**，成員需每週重新授權）。
 3. **反向代理**：將 `GOOGLE_OAUTH_REDIRECT_URI`（HTTPS）代理到容器的 `MEMBERSHIP_OAUTH_PORT`（預設 8081）。
+   可直接使用範例設定 [`deploy/nginx-membership.conf.example`](deploy/nginx-membership.conf.example)（含 TLS 與 certbot 說明）。docker-compose 預設將此埠綁定在 `127.0.0.1`，僅供本機 nginx 存取。
 4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_GUILD_ID`、`MEMBERSHIP_ROLE_ID`、
    `MEMBERSHIP_YT_CHANNEL_ID`、`MEMBERSHIP_TOKEN_ENC_KEY`（用 `cryptography.fernet` 產生），
    建議另設 `YOUTUBE_API_KEY` 以穩定列出會限播放清單。詳見 `.env.example`。
