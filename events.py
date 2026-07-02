@@ -6,6 +6,7 @@ from config import (
     HOLODEX_NOTIFY_UPLOAD_CHANNEL_ID,
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
+    MEMBERSHIP_CHECK_INTERVAL,
     TWITTER_NOTIFY_CHANNEL_ID,
     TWITTER_POLL_INTERVAL,
     TWITTER_SCREEN_NAMES,
@@ -59,6 +60,20 @@ async def on_ready():
         ):
             bot.yt_community_monitor_task = bot.loop.create_task(
                 bot.youtube_community_monitor()
+            )
+
+    if bot.membership_enabled:
+        logger.info(
+            "Starting YouTube membership verification (re-check every %ds)",
+            MEMBERSHIP_CHECK_INTERVAL,
+        )
+        await bot.start_membership_server()
+        if (
+            bot.membership_monitor_task is None
+            or bot.membership_monitor_task.done()
+        ):
+            bot.membership_monitor_task = bot.loop.create_task(
+                bot.membership_monitor()
             )
 
 

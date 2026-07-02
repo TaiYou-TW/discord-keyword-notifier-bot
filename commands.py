@@ -3,7 +3,12 @@ import discord
 from discord import app_commands
 
 from bot import bot
-from config import DEFAULT_COOLDOWN, logger, ADMIN_USER_IDS
+from config import (
+    DEFAULT_COOLDOWN,
+    logger,
+    ADMIN_USER_IDS,
+    MEMBERSHIP_GUILD_ID,
+)
 
 
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
@@ -929,3 +934,247 @@ async def scan_emoji_history(
                 interaction.user.id,
                 e2,
             )
+
+
+@bot.tree.command(
+    name="verify_membership",
+    description="連結 YouTube 帳號以驗證頻道會員資格並取得會員身分組",
+)
+async def verify_membership(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    url = bot.build_oauth_url(interaction.user.id)
+    embed = discord.Embed(
+        title="🔗 YouTube 會員驗證",
+        description=(
+            "點擊下方連結，使用你的 Google 帳號授權，"
+            "Bot 會確認你是否為指定頻道的會員並自動給予身分組。\n\n"
+            f"**[點此開始授權]({url})**\n\n"
+            "⚠️ 此連結僅限你本人使用、15 分鐘內有效，請勿分享。"
+        ),
+        color=0xE74C3C,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    logger.info(
+        "User %s(%d) started membership verification",
+        interaction.user,
+        interaction.user.id,
+    )
+
+
+@bot.tree.command(name="membership_status", description="查看你的 YouTube 會員驗證狀態")
+async def membership_status(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    row = bot.get_membership_row(interaction.user.id)
+    if not row:
+        await interaction.followup.send(
+            "你尚未連結 YouTube 帳號，請使用 `/verify_membership`。", ephemeral=True
+        )
+        return
+
+    _, _yt_channel_id, _, last_checked = row
+    checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+
+    if not bot.membership_channel_map:
+        await interaction.followup.send(
+            f"已連結你的 YouTube 帳號，但管理員尚未設定任何驗證頻道。\n最後檢查：{checked}",
+            ephemeral=True,
+        )
+        return
+
+    # Report per-channel status from the member's actual roles (source of truth).
+    guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
+    member = None
+    if guild:
+        member = guild.get_member(interaction.user.id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(interaction.user.id)
+            except Exception:
+                member = None
+
+    lines = []
+    for ch, role_id in bot.membership_channel_map:
+        has_role = bool(member) and any(r.id == role_id for r in member.roles)
+        role = guild.get_role(role_id) if guild else None
+        role_name = role.name if role else f"@{role_id}"
+        lines.append(f"{'✅' if has_role else '❌'} `{ch}` → {role_name}")
+
+    await interaction.followup.send(
+        "你的 YouTube 會員驗證狀態：\n" + "\n".join(lines) + f"\n最後檢查：{checked}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="membership_unlink", description="解除 YouTube 帳號連結並移除會員身分組"
+)
+async def membership_unlink(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    removed = await bot.unlink_membership(interaction.user.id)
+    if removed:
+        await interaction.followup.send(
+            "✅ 已解除連結並撤銷授權，會員身分組已移除。", ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            "你尚未連結任何 YouTube 帳號。", ephemeral=True
+        )
+    logger.info(
+        "User %s(%d) unlinked membership", interaction.user, interaction.user.id
+    )
+
+
+@bot.tree.command(
+    name="membership_recheck",
+    description="[管理員] 立即重新驗證所有已連結成員的會員資格",
+)
+async def membership_recheck(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    bot.loop.create_task(bot.membership_recheck_all())
+    await interaction.followup.send(
+        "🔄 已在背景開始重新驗證所有已連結成員。", ephemeral=True
+    )
+    logger.info(
+        "Admin %s(%d) triggered membership recheck",
+        interaction.user,
+        interaction.user.id,
+    )
+
+
+@bot.tree.command(
+    name="membership_add",
+    description="[管理員] 新增／更新 YouTube 頻道與會員身分組的對應",
+)
+@app_commands.describe(
+    channel_id="YouTube 頻道 ID（UC 開頭）",
+    role="驗證通過後要授予的身分組",
+)
+async def membership_add(
+    interaction: discord.Interaction, channel_id: str, role: discord.Role
+):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    channel_id = channel_id.strip()
+    if not channel_id.startswith("UC") or len(channel_id) < 20:
+        await interaction.response.send_message(
+            "❌ 頻道 ID 格式錯誤，需為 `UC` 開頭的頻道 ID。", ephemeral=True
+        )
+        return
+    if role.guild.id != MEMBERSHIP_GUILD_ID:
+        await interaction.response.send_message(
+            "❌ 該身分組不在已設定的會員驗證伺服器中。", ephemeral=True
+        )
+        return
+    if role.is_default() or role.managed:
+        await interaction.response.send_message(
+            "❌ 不能使用 @everyone 或由整合管理的身分組。", ephemeral=True
+        )
+        return
+
+    bot.add_membership_channel(channel_id, role.id, interaction.user.id)
+    await interaction.response.send_message(
+        f"✅ 已設定：`{channel_id}` → {role.mention}\n"
+        "新設定會在下次自動重新驗證時套用，或使用 `/membership_recheck` 立即套用。",
+        ephemeral=True,
+    )
+    logger.info(
+        "Admin %s(%d) mapped channel %s -> role %d",
+        interaction.user,
+        interaction.user.id,
+        channel_id,
+        role.id,
+    )
+
+
+@bot.tree.command(
+    name="membership_remove",
+    description="[管理員] 移除 YouTube 頻道與會員身分組的對應",
+)
+@app_commands.describe(channel_id="要移除的 YouTube 頻道 ID（UC 開頭）")
+async def membership_remove(interaction: discord.Interaction, channel_id: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    removed = bot.remove_membership_channel(channel_id.strip())
+    if removed:
+        await interaction.response.send_message(
+            f"✅ 已移除頻道 `{channel_id.strip()}` 的對應。"
+            "（現有成員的身分組會在下次重新驗證時同步。）",
+            ephemeral=True,
+        )
+        logger.info(
+            "Admin %s(%d) removed channel mapping %s",
+            interaction.user,
+            interaction.user.id,
+            channel_id.strip(),
+        )
+    else:
+        await interaction.response.send_message(
+            f"找不到頻道 `{channel_id.strip()}` 的對應。", ephemeral=True
+        )
+
+
+@bot.tree.command(
+    name="membership_list", description="[管理員] 列出所有 YouTube 頻道與身分組對應"
+)
+async def membership_list(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    if not bot.membership_channel_map:
+        await interaction.response.send_message(
+            "尚未設定任何頻道對應，使用 `/membership_add` 新增。", ephemeral=True
+        )
+        return
+
+    guild = bot.get_guild(MEMBERSHIP_GUILD_ID)
+    lines = []
+    for ch, role_id in bot.membership_channel_map:
+        role = guild.get_role(role_id) if guild else None
+        lines.append(f"- `{ch}` → {role.mention if role else f'@{role_id}（找不到）'}")
+    await interaction.response.send_message(
+        "目前的會員驗證頻道對應：\n" + "\n".join(lines), ephemeral=True
+    )

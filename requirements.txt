@@ -3,3 +3,4 @@ python-dotenv
 watchdog
 aiohttp
 emoji
+cryptography
