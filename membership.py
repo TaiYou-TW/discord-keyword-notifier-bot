@@ -15,6 +15,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import os
 import sqlite3
 import time
 import urllib.parse
@@ -521,6 +522,10 @@ class MembershipMixin:
         app = web.Application()
         app.router.add_get("/oauth/callback", self._handle_oauth_callback)
         app.router.add_get("/healthz", self._handle_healthz)
+        # Privacy policy / terms served on the same host (handy for the Google
+        # consent screen, and works even in a tunnel-only setup with no nginx).
+        app.router.add_get("/privacy.html", self._handle_privacy)
+        app.router.add_get("/terms.html", self._handle_terms)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, MEMBERSHIP_OAUTH_HOST, MEMBERSHIP_OAUTH_PORT)
@@ -534,6 +539,22 @@ class MembershipMixin:
 
     async def _handle_healthz(self, request: web.Request) -> web.Response:
         return web.Response(text="ok")
+
+    async def _handle_privacy(self, request: web.Request) -> web.Response:
+        return self._serve_static_file("privacy.html")
+
+    async def _handle_terms(self, request: web.Request) -> web.Response:
+        return self._serve_static_file("terms.html")
+
+    def _serve_static_file(self, name: str) -> web.Response:
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "static", name
+        )
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return web.Response(text=fh.read(), content_type="text/html")
+        except OSError:
+            return web.Response(status=404, text="Not found")
 
     async def _handle_oauth_callback(self, request: web.Request):
         error = request.query.get("error")

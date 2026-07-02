@@ -60,6 +60,10 @@ server {
         access_log off;
     }
 
+    # Privacy policy / terms (the bot serves these; needed for Google consent).
+    location = /privacy.html { proxy_pass http://127.0.0.1:8081; }
+    location = /terms.html   { proxy_pass http://127.0.0.1:8081; }
+
     # Nothing else is served on this host.
     location / {
         return 404;
