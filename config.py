@@ -137,4 +137,14 @@ RECORDING_OUTPUT_DIR = os.getenv("RECORDING_OUTPUT_DIR", "recordings")
 RECORDING_MAX_CONCURRENT = int(os.getenv("RECORDING_MAX_CONCURRENT", "3"))
 YT_DLP_PATH = os.getenv("YT_DLP_PATH", "")
 
+# Optional cloud upload for finished recordings via rclone (`/record_upload`),
+# for files too large for a direct Discord upload. RCLONE_REMOTE is an rclone
+# destination such as "gdrive:vtuber-recordings" (leave blank to disable);
+# RCLONE_CONFIG optionally points at an rclone.conf; RCLONE_PATH overrides the
+# binary. rclone is used rather than rsync because it speaks Google Drive (and
+# other cloud backends) directly and can hand back a shareable link.
+RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "")
+RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", "")
+RCLONE_PATH = os.getenv("RCLONE_PATH", "rclone")
+
 ZERO_WIDTH_SPACE = "\u200b"

@@ -20,6 +20,9 @@ import sys
 import time
 
 from config import (
+    RCLONE_CONFIG,
+    RCLONE_PATH,
+    RCLONE_REMOTE,
     RECORDING_MAX_CONCURRENT,
     RECORDING_OUTPUT_DIR,
     YT_DLP_PATH,
@@ -201,12 +204,17 @@ class RecordingMixin:
             message += f"\n```\n{tail}\n```"
         return False, message, None
 
-    async def stop_recording(self, key: str) -> bool:
-        """Gracefully stop a recording so yt-dlp finalizes the output file."""
+    async def stop_recording(self, key: str) -> dict | None:
+        """Gracefully stop a recording so yt-dlp finalizes the output file.
+
+        Returns the recording record (with an ``output_file`` key pointing at
+        the saved media file, or None if it can't be located), or None if no
+        active recording matches ``key``.
+        """
         self._reap_finished_recordings()
         rec = self.active_recordings.get(key)
         if not rec:
-            return False
+            return None
 
         process = rec.get("process")
         if process is not None and process.returncode is None:
@@ -235,8 +243,133 @@ class RecordingMixin:
         except Exception:
             pass
         self.active_recordings.pop(key, None)
-        logger.info("Stopped recording %s", key)
-        return True
+        rec["output_file"] = self._find_output_file(key, rec.get("started_at"))
+        logger.info("Stopped recording %s (file=%s)", key, rec.get("output_file"))
+        return rec
+
+    # ---- saved-file helpers --------------------------------------------------
+
+    def _find_output_file(self, key: str, started_at) -> str | None:
+        """Locate the media file a recording wrote (largest non-log match)."""
+        marker = f"-{key}-{started_at}."
+        try:
+            names = os.listdir(RECORDING_OUTPUT_DIR)
+        except OSError:
+            return None
+        candidates = []
+        for name in names:
+            if name.endswith(".log") or marker not in name:
+                continue
+            path = os.path.join(RECORDING_OUTPUT_DIR, name)
+            try:
+                candidates.append((os.path.getsize(path), path))
+            except OSError:
+                continue
+        if not candidates:
+            return None
+        candidates.sort(reverse=True)  # largest first (the media, not fragments)
+        return candidates[0][1]
+
+    def list_saved_recordings(self) -> list[dict]:
+        """List finished recordings on disk (name, size, mtime), newest first."""
+        try:
+            names = os.listdir(RECORDING_OUTPUT_DIR)
+        except OSError:
+            return []
+        files = []
+        for name in names:
+            if name.endswith(".log"):
+                continue
+            path = os.path.join(RECORDING_OUTPUT_DIR, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            files.append(
+                {"name": name, "size": st.st_size, "mtime": int(st.st_mtime)}
+            )
+        files.sort(key=lambda f: f["mtime"], reverse=True)
+        return files
+
+    def safe_recording_path(self, filename: str) -> str | None:
+        """Resolve a user-supplied filename to a file inside the recordings dir.
+
+        Guards against path traversal: only a bare basename within
+        RECORDING_OUTPUT_DIR is accepted.
+        """
+        base = os.path.basename(filename.strip())
+        if not base or base.endswith(".log"):
+            return None
+        path = os.path.join(RECORDING_OUTPUT_DIR, base)
+        root = os.path.realpath(RECORDING_OUTPUT_DIR)
+        full = os.path.realpath(path)
+        try:
+            if os.path.commonpath([root, full]) != root:
+                return None
+        except ValueError:
+            return None
+        return full if os.path.isfile(full) else None
+
+    # ---- cloud upload (rclone) -----------------------------------------------
+
+    async def upload_recording(self, path: str) -> tuple[bool, str | None, str | None]:
+        """Upload a finished recording to RCLONE_REMOTE via rclone.
+
+        Returns ``(ok, share_link, error)``. rclone (not rsync) is used because
+        it can target Google Drive et al. and mint a shareable link.
+        """
+        if not RCLONE_REMOTE:
+            return False, None, "尚未設定 RCLONE_REMOTE"
+        if not os.path.isfile(path):
+            return False, None, "找不到檔案"
+
+        base = os.path.basename(path)
+        dest = RCLONE_REMOTE.rstrip("/") + "/" + base
+        common = ["--config", RCLONE_CONFIG] if RCLONE_CONFIG else []
+
+        rc, out = await self._run_process(
+            [RCLONE_PATH, *common, "copyto", path, dest], timeout=None
+        )
+        if rc != 0:
+            return False, None, (out or "rclone copy 失敗").strip()[-500:]
+
+        rc, out = await self._run_process(
+            [RCLONE_PATH, *common, "link", dest], timeout=120
+        )
+        link = None
+        if rc == 0 and out.strip():
+            link = out.strip().splitlines()[-1].strip()
+        return True, link, None
+
+    @staticmethod
+    async def _run_process(cmd: list[str], timeout: float | None):
+        """Run a subprocess, returning ``(returncode, combined_output_text)``."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return 127, f"找不到執行檔：{cmd[0]}"
+        except Exception as exc:  # noqa: BLE001
+            return 1, str(exc)
+        try:
+            if timeout:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            else:
+                out, _ = await proc.communicate()
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return 1, "逾時"
+        return proc.returncode, (out or b"").decode("utf-8", "replace")
 
     @staticmethod
     def _read_log_tail(path: str, max_bytes: int = 600) -> str:

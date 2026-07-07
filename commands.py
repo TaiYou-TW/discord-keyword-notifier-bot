@@ -1,5 +1,5 @@
+import os
 import sqlite3
-import aiohttp
 import discord
 from discord import app_commands
 
@@ -8,6 +8,7 @@ from config import (
     DEFAULT_COOLDOWN,
     logger,
     ADMIN_USER_IDS,
+    RCLONE_REMOTE,
     RECORDING_OUTPUT_DIR,
 )
 
@@ -983,7 +984,7 @@ async def membership_status(interaction: discord.Interaction):
         )
         return
 
-    _, _yt_channel_id, _, last_checked = row
+    _, _yt_channel_id, _, last_checked, _title = row
     checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
 
     guild = interaction.guild
@@ -1234,26 +1235,28 @@ async def membership_account(interaction: discord.Interaction):
         )
         return
 
-    _, yt_channel_id, _, last_checked = row
+    _, yt_channel_id, _, last_checked, yt_channel_title = row
     checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+
+    # Look up the channel name with the member's own OAuth authorization
+    # (not a shared API key) and cache it, if we don't already have it.
+    if yt_channel_id and not yt_channel_title:
+        try:
+            yt_channel_title = await bot.refresh_channel_title(interaction.user.id)
+        except Exception:
+            logger.debug("Failed to refresh channel title", exc_info=True)
 
     if yt_channel_id:
         url = f"https://www.youtube.com/channel/{yt_channel_id}"
-        title = None
-        try:
-            async with aiohttp.ClientSession() as session:
-                title = await bot.get_channel_title(session, yt_channel_id)
-        except Exception:
-            logger.debug("Failed to fetch channel title", exc_info=True)
-        name_line = f"[{title}]({url})" if title else url
+        display = yt_channel_title or yt_channel_id
         description = (
-            f"目前連結的 YouTube 頻道：\n{name_line}\n"
+            f"目前連結的 YouTube 頻道：\n[{display}]({url})\n"
             f"頻道 ID：`{yt_channel_id}`\n"
             f"最後檢查：{checked}"
         )
     else:
         description = (
-            "已連結你的 YouTube 帳號，但沒有取得頻道 ID"
+            "已連結你的 YouTube 帳號，但沒有取得頻道資訊"
             "（授權時可能未包含頻道資訊）。\n"
             f"最後檢查：{checked}"
         )
@@ -1302,8 +1305,11 @@ async def membership_role_list(interaction: discord.Interaction):
         )
         return
 
-    # Annotate each holder with their linked YouTube channel id, if known.
-    linked = {uid: yt for uid, yt, _enc, _last in bot._all_membership_rows()}
+    # Annotate each holder with their linked YouTube channel (name if known).
+    linked = {
+        uid: (yt, title)
+        for uid, yt, _enc, _last, title in bot._all_membership_rows()
+    }
 
     embed = discord.Embed(
         title=f"🎫 {guild.name} 會員身分組名單",
@@ -1324,8 +1330,13 @@ async def membership_role_list(interaction: discord.Interaction):
         if holders:
             lines = []
             for member in holders[:20]:
-                yt = linked.get(member.id)
-                suffix = f"（`{yt}`）" if yt else "（未連結）"
+                info = linked.get(member.id)
+                if info:
+                    yt_id, yt_title = info
+                    label = yt_title or yt_id or "已連結"
+                    suffix = f"（{label}）"
+                else:
+                    suffix = "（未連結）"
                 lines.append(f"• {member.mention} {suffix}")
             if len(holders) > 20:
                 lines.append(f"…以及其他 {len(holders) - 20} 位")
@@ -1409,24 +1420,213 @@ async def record_stop(interaction: discord.Interaction, recording_id: str):
         return
 
     await interaction.response.defer(ephemeral=True)
-    stopped = await bot.stop_recording(recording_id.strip())
-    if stopped:
+    rid = recording_id.strip()
+    rec = await bot.stop_recording(rid)
+    if not rec:
         await interaction.followup.send(
-            f"⏹️ 已停止錄影 `{recording_id.strip()}`，檔案已儲存至 "
-            f"`{RECORDING_OUTPUT_DIR}`。",
-            ephemeral=True,
+            f"找不到進行中的錄影 `{rid}`（用 `/record_list` 確認）。", ephemeral=True
         )
-        logger.info(
-            "Admin %s(%d) stopped recording %s",
-            interaction.user,
-            interaction.user.id,
-            recording_id.strip(),
+        return
+
+    out = rec.get("output_file")
+    if out and os.path.isfile(out):
+        name = os.path.basename(out)
+        size = os.path.getsize(out)
+        limit = getattr(getattr(interaction, "guild", None), "filesize_limit", 0) or (
+            25 * 1024 * 1024
+        )
+        options = []
+        if RCLONE_REMOTE:
+            options.append(f"上傳雲端並取得連結：`/record_upload {name}`")
+        if size <= limit:
+            options.append(f"直接分享到此頻道：`/record_share {name}`")
+        elif not RCLONE_REMOTE:
+            options.append(
+                f"檔案超過 Discord 上傳上限（約 {limit / 1024 / 1024:.0f} MB），"
+                f"請從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得"
+            )
+        msg = (
+            f"⏹️ 已停止錄影 `{rid}`。\n"
+            f"檔案：`{name}`（{size / 1024 / 1024:.1f} MB）\n"
+            + "\n".join(f"• {o}" for o in options)
         )
     else:
+        msg = (
+            f"⏹️ 已停止錄影 `{rid}`，但找不到輸出檔（可能仍在寫出）。"
+            f"輸出目錄：`{RECORDING_OUTPUT_DIR}`。"
+        )
+
+    await interaction.followup.send(msg, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) stopped recording %s", interaction.user, interaction.user.id, rid
+    )
+
+
+@bot.tree.command(
+    name="record_files",
+    description="[管理員] 列出已錄製完成的直播檔案",
+)
+async def record_files(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    files = bot.list_saved_recordings()
+    if not files:
         await interaction.followup.send(
-            f"找不到進行中的錄影 `{recording_id.strip()}`（用 `/record_list` 確認）。",
+            f"錄影資料夾 `{RECORDING_OUTPUT_DIR}` 中沒有檔案。", ephemeral=True
+        )
+        return
+
+    lines = []
+    for f in files[:25]:
+        lines.append(
+            f"• `{f['name']}` — {f['size'] / 1024 / 1024:.1f} MB · "
+            f"<t:{f['mtime']}:R>"
+        )
+    description = "\n".join(lines)
+    if len(files) > 25:
+        description += f"\n…共 {len(files)} 個檔案（僅顯示前 25 個）"
+
+    share = "`/record_upload <檔名>`（雲端）" if RCLONE_REMOTE else "`/record_share <檔名>`"
+    embed = discord.Embed(
+        title="🎞️ 已錄製的直播",
+        description=description[:4000],
+        color=0xE74C3C,
+        timestamp=interaction.created_at,
+    )
+    embed.set_footer(text=f"分享：{share} · 目錄 {RECORDING_OUTPUT_DIR}")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed %d saved recording(s)",
+        interaction.user,
+        interaction.user.id,
+        len(files),
+    )
+
+
+@bot.tree.command(
+    name="record_share",
+    description="[管理員] 將錄影檔直接上傳到此頻道（受 Discord 檔案大小限制）",
+)
+@app_commands.describe(filename="檔名（見 /record_files）")
+async def record_share(interaction: discord.Interaction, filename: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    path = bot.safe_recording_path(filename)
+    if not path:
+        await interaction.followup.send(
+            f"找不到檔案 `{filename.strip()}`（用 `/record_files` 確認）。",
             ephemeral=True,
         )
+        return
+
+    size = os.path.getsize(path)
+    limit = getattr(getattr(interaction, "guild", None), "filesize_limit", 0) or (
+        25 * 1024 * 1024
+    )
+    if size > limit:
+        hint = (
+            "，請改用 `/record_upload` 上傳雲端"
+            if RCLONE_REMOTE
+            else f"，請從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得或設定雲端上傳"
+        )
+        await interaction.followup.send(
+            f"❌ 檔案 {size / 1024 / 1024:.1f} MB 超過此伺服器上傳上限"
+            f"（約 {limit / 1024 / 1024:.0f} MB）{hint}。",
+            ephemeral=True,
+        )
+        return
+
+    channel = interaction.channel
+    if channel is None:
+        await interaction.followup.send("❌ 無法取得目前頻道。", ephemeral=True)
+        return
+
+    try:
+        await channel.send(
+            content=f"🎥 錄影分享：`{os.path.basename(path)}`",
+            file=discord.File(path),
+        )
+    except Exception as e:
+        logger.exception("Failed to upload recording %s to Discord", path)
+        await interaction.followup.send(f"⚠️ 上傳失敗：{e}", ephemeral=True)
+        return
+
+    await interaction.followup.send("✅ 已分享到此頻道。", ephemeral=True)
+    logger.info(
+        "Admin %s(%d) shared recording %s to channel %s",
+        interaction.user,
+        interaction.user.id,
+        os.path.basename(path),
+        getattr(channel, "id", "?"),
+    )
+
+
+@bot.tree.command(
+    name="record_upload",
+    description="[管理員] 上傳錄影檔到雲端（rclone）並在此頻道貼出連結",
+)
+@app_commands.describe(filename="檔名（見 /record_files）")
+async def record_upload(interaction: discord.Interaction, filename: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if not RCLONE_REMOTE:
+        await interaction.response.send_message(
+            "❌ 尚未設定雲端上傳（請設定 `RCLONE_REMOTE`，見 README）。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    path = bot.safe_recording_path(filename)
+    if not path:
+        await interaction.followup.send(
+            f"找不到檔案 `{filename.strip()}`（用 `/record_files` 確認）。",
+            ephemeral=True,
+        )
+        return
+
+    name = os.path.basename(path)
+    await interaction.followup.send(
+        f"☁️ 開始上傳 `{name}` 到雲端，完成後會在此頻道貼出連結…", ephemeral=True
+    )
+    ok, link, err = await bot.upload_recording(path)
+    if not ok:
+        await interaction.followup.send(f"⚠️ 上傳失敗：{err}", ephemeral=True)
+        return
+
+    channel = interaction.channel
+    text = f"🎥 錄影上傳完成：`{name}`" + (f"\n{link}" if link else "")
+    if channel is not None:
+        try:
+            await channel.send(text)
+        except Exception:
+            logger.exception("Failed to post upload link to channel")
+    await interaction.followup.send(
+        "✅ 已上傳並貼出連結。"
+        if link
+        else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。",
+        ephemeral=True,
+    )
+    logger.info(
+        "Admin %s(%d) uploaded recording %s to cloud (link=%s)",
+        interaction.user,
+        interaction.user.id,
+        name,
+        bool(link),
+    )
 
 
 @bot.tree.command(

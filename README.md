@@ -38,6 +38,9 @@ docker compose up --build
 - `/record_start <target> [from_start]`：開始錄製 YouTube 直播（管理員專用）
 - `/record_stop <recording_id>`：停止指定的直播錄影（管理員專用）
 - `/record_list`：列出進行中的直播錄影（管理員專用）
+- `/record_files`：列出已錄製完成的檔案（管理員專用）
+- `/record_share <filename>`：把錄影檔直接上傳到頻道（受 Discord 檔案大小限制，管理員專用）
+- `/record_upload <filename>`：把錄影檔上傳到雲端並貼出連結（rclone，管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
@@ -191,14 +194,40 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 - `/record_start <target> [from_start=False]`：開始錄製。`target` 可為 YouTube 影片網址或
   影片 ID（進行中的直播）；`from_start=True` 會嘗試從直播開頭錄製（需該直播開放 DVR）。
 - `/record_stop <recording_id>`：停止錄影（送出 SIGINT 讓 yt-dlp 正常收尾並寫出檔案）。
-  `recording_id` 即 `/record_list` 顯示的 ID（通常是 11 碼影片 ID）。
+  `recording_id` 即 `/record_list` 顯示的 ID（通常是 11 碼影片 ID）。停止後會回報檔名、
+  大小與可用的分享方式。
 - `/record_list`：列出進行中的錄影、開始時間與來源網址。
+- `/record_files`：列出錄影資料夾中已完成的檔案（檔名、大小、時間）。
+
+### 分享錄影
+
+直播錄影檔通常很大，而 Discord 有上傳大小限制（一般 25 MB，依伺服器加成而不同），因此提供兩種方式：
+
+- **`/record_share <filename>`**：把檔案**直接上傳到目前頻道**。僅適用於未超過該伺服器上傳上限的檔案，
+  超過時會提示改用雲端上傳或從主機取得。
+- **`/record_upload <filename>`**：用 [`rclone`](https://rclone.org/) 上傳到**雲端**（如 Google Drive），
+  取得分享連結後由 Bot 貼到頻道。適合大型檔案。
+
+> 為什麼是 rclone 而不是 rsync？`rsync` 是走 SSH 同步到「另一台伺服器」，本身不會上傳到 Google Drive；
+> `rclone` 原生支援 Google Drive 等雲端空間，且能產生分享連結。若你想同步到自有伺服器再用網址分享，
+> `rsync`／`scp` 也可以，但那需要你自架檔案伺服器。
+
+啟用雲端上傳（Google Drive 範例）：
+
+1. 在主機上執行一次 `rclone config` 建立遠端（例如命名為 `gdrive` 的 Google Drive 遠端），產生 `rclone.conf`。
+2. 依 `docker-compose.yml` 內的註解，把該 `rclone.conf` 掛載進容器，並設定 `RCLONE_CONFIG` 指向它。
+3. 在 `.env` 設定 `RCLONE_REMOTE=gdrive:vtuber-recordings`（`<遠端>:<資料夾>`）。
+
+亦可不透過 Bot，直接從**主機**的錄影資料夾（`RECORDING_HOST_DIR`，預設 `./recordings`）取用檔案，
+自行上傳或用任何檔案伺服器分享。
 
 ### 注意事項
 
-- **相依套件**：需要 `yt-dlp`（已列於 `requirements.txt`）與 `ffmpeg`（已在 Docker image 內安裝）。
+- **相依套件**：需要 `yt-dlp`（已列於 `requirements.txt`）、`ffmpeg` 與 `rclone`（皆已在 Docker image 內安裝）。
   修改 `requirements.txt` 或 `Dockerfile` 後需 `docker compose up -d --build`。
+- **資料夾綁定**：`docker-compose.yml` 已把主機的 `RECORDING_HOST_DIR`（預設 `./recordings`）綁定到容器的
+  `/app/recordings`，錄影檔會直接出現在主機上。
 - **狀態不持久**：進行中的錄影只存在記憶體中。Bot 行程重啟（含 watchmedo 偵測到 `.py` 變更
   自動重載、或容器重啟）會中斷所有錄影，已寫入的檔案仍會保留。
 - **同時上限**：由 `RECORDING_MAX_CONCURRENT` 控制（預設 3）。
-- **磁碟空間**：直播錄影檔案可能很大，請留意 `RECORDING_OUTPUT_DIR` 所在磁碟的容量。
+- **磁碟空間**：直播錄影檔案可能很大，請留意 `RECORDING_HOST_DIR` 所在磁碟的容量。
