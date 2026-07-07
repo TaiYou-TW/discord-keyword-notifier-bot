@@ -227,7 +227,8 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 
 ### 注意事項
 
-- **相依套件**：需要 `yt-dlp`（已列於 `requirements.txt`）、`ffmpeg` 與 `rclone`（皆已在 Docker image 內安裝）。
+- **相依套件**：需要 `yt-dlp`（已列於 `requirements.txt`）、`ffmpeg`、`rclone` 與 `deno`（皆已在 Docker image 內安裝；
+  `deno` 供 yt-dlp 解 YouTube 簽章／nsig 挑戰，避免下載被限速或解析失敗）。
   修改 `requirements.txt` 或 `Dockerfile` 後需 `docker compose up -d --build`。
 - **資料夾綁定**：`docker-compose.yml` 已把主機的 `RECORDING_HOST_DIR`（預設 `./recordings`）綁定到容器的
   `/app/recordings`，錄影檔會直接出現在主機上。
