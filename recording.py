@@ -25,9 +25,14 @@ from config import (
     RCLONE_REMOTE,
     RECORDING_MAX_CONCURRENT,
     RECORDING_OUTPUT_DIR,
+    RECORDING_RETENTION_DAYS,
     YT_DLP_PATH,
     logger,
 )
+
+# How often the retention sweep runs. The retention window itself
+# (RECORDING_RETENTION_DAYS) is configurable; this cadence is not.
+RECORDING_CLEANUP_INTERVAL = 6 * 3600
 
 # A bare YouTube video id, or a video id embedded in a common URL shape.
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -293,23 +298,31 @@ class RecordingMixin:
         files.sort(key=lambda f: f["mtime"], reverse=True)
         return files
 
-    def safe_recording_path(self, filename: str) -> str | None:
-        """Resolve a user-supplied filename to a file inside the recordings dir.
-
-        Guards against path traversal: only a bare basename within
-        RECORDING_OUTPUT_DIR is accepted.
+    def _safe_recording_name(self, filename: str) -> str | None:
+        """Validate a user-supplied filename to a bare basename inside the
+        recordings dir (guards against path traversal). Existence is not
+        required, so this also works for cloud-only operations.
         """
-        base = os.path.basename(filename.strip())
-        if not base or base.endswith(".log"):
+        stripped = (filename or "").strip()
+        base = os.path.basename(stripped)
+        # Reject anything that isn't already a bare filename (had path parts).
+        if not base or base != stripped or base.endswith(".log"):
             return None
-        path = os.path.join(RECORDING_OUTPUT_DIR, base)
         root = os.path.realpath(RECORDING_OUTPUT_DIR)
-        full = os.path.realpath(path)
+        full = os.path.realpath(os.path.join(RECORDING_OUTPUT_DIR, base))
         try:
             if os.path.commonpath([root, full]) != root:
                 return None
         except ValueError:
             return None
+        return base
+
+    def safe_recording_path(self, filename: str) -> str | None:
+        """Resolve a filename to an existing file inside the recordings dir."""
+        base = self._safe_recording_name(filename)
+        if not base:
+            return None
+        full = os.path.join(RECORDING_OUTPUT_DIR, base)
         return full if os.path.isfile(full) else None
 
     # ---- cloud upload (rclone) -----------------------------------------------
@@ -342,6 +355,108 @@ class RecordingMixin:
         if rc == 0 and out.strip():
             link = out.strip().splitlines()[-1].strip()
         return True, link, None
+
+    async def delete_recording(self, filename: str, from_cloud: bool) -> dict:
+        """Delete a recording from disk and, optionally, the cloud remote.
+
+        Returns a result dict: {valid, name, local_existed, local_deleted,
+        cloud}. ``cloud`` is None when not requested, "ok"/"no_remote" or an
+        "error:..." string otherwise.
+        """
+        base = self._safe_recording_name(filename)
+        if not base:
+            return {"valid": False}
+
+        path = os.path.join(RECORDING_OUTPUT_DIR, base)
+        result = {
+            "valid": True,
+            "name": base,
+            "local_existed": os.path.isfile(path),
+            "local_deleted": False,
+            "cloud": None,
+        }
+        if result["local_existed"]:
+            try:
+                os.remove(path)
+                result["local_deleted"] = True
+                self._remove_sibling_log(base)
+            except OSError as exc:
+                result["error"] = str(exc)
+                logger.exception("Failed to delete recording %s", base)
+
+        if from_cloud:
+            if not RCLONE_REMOTE:
+                result["cloud"] = "no_remote"
+            else:
+                dest = RCLONE_REMOTE.rstrip("/") + "/" + base
+                common = ["--config", RCLONE_CONFIG] if RCLONE_CONFIG else []
+                rc, out = await self._run_process(
+                    [RCLONE_PATH, *common, "deletefile", dest], timeout=120
+                )
+                result["cloud"] = (
+                    "ok" if rc == 0 else "error:" + (out or "").strip()[-300:]
+                )
+        return result
+
+    def _remove_sibling_log(self, media_name: str) -> None:
+        """Best-effort removal of the per-recording log beside a media file
+        (media: <title>-<id>-<started>.<ext>; log: record-<id>-<started>.log)."""
+        stem = media_name.rsplit(".", 1)[0]
+        parts = stem.rsplit("-", 2)
+        if len(parts) != 3:
+            return
+        _title, vid, started = parts
+        try:
+            os.remove(os.path.join(RECORDING_OUTPUT_DIR, f"record-{vid}-{started}.log"))
+        except OSError:
+            pass
+
+    # ---- retention / auto-cleanup --------------------------------------------
+
+    def cleanup_old_recordings(self) -> int:
+        """Delete recordings (and logs) older than RECORDING_RETENTION_DAYS.
+
+        Returns the number of files removed. No-op when retention <= 0. Files
+        belonging to an in-progress recording are never touched.
+        """
+        if RECORDING_RETENTION_DAYS <= 0:
+            return 0
+        cutoff = time.time() - RECORDING_RETENTION_DAYS * 86400
+        try:
+            names = os.listdir(RECORDING_OUTPUT_DIR)
+        except OSError:
+            return 0
+        active_keys = set(self.active_recordings.keys())
+        removed = 0
+        for name in names:
+            path = os.path.join(RECORDING_OUTPUT_DIR, name)
+            if not os.path.isfile(path):
+                continue
+            if any(f"-{key}-" in name for key in active_keys):
+                continue
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue
+                os.remove(path)
+                removed += 1
+            except OSError:
+                logger.exception("Failed to remove old recording %s", name)
+        if removed:
+            logger.info(
+                "Recording retention removed %d file(s) older than %d day(s)",
+                removed,
+                RECORDING_RETENTION_DAYS,
+            )
+        return removed
+
+    async def recording_cleanup_monitor(self) -> None:
+        await asyncio.sleep(30)  # let startup settle
+        while True:
+            try:
+                await asyncio.to_thread(self.cleanup_old_recordings)
+            except Exception:
+                logger.exception("Recording cleanup monitor error")
+            await asyncio.sleep(RECORDING_CLEANUP_INTERVAL)
 
     @staticmethod
     async def _run_process(cmd: list[str], timeout: float | None):

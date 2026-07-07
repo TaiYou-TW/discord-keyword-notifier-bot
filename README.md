@@ -39,8 +39,8 @@ docker compose up --build
 - `/record_stop <recording_id>`：停止指定的直播錄影（管理員專用）
 - `/record_list`：列出進行中的直播錄影（管理員專用）
 - `/record_files`：列出已錄製完成的檔案（管理員專用）
-- `/record_share <filename>`：把錄影檔直接上傳到頻道（受 Discord 檔案大小限制，管理員專用）
 - `/record_upload <filename>`：把錄影檔上傳到雲端並貼出連結（rclone，管理員專用）
+- `/record_delete <filename> [from_cloud]`：刪除錄影檔，可選擇一併從雲端刪除（管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
@@ -198,15 +198,15 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
   大小與可用的分享方式。
 - `/record_list`：列出進行中的錄影、開始時間與來源網址。
 - `/record_files`：列出錄影資料夾中已完成的檔案（檔名、大小、時間）。
+- `/record_delete <filename> [from_cloud=False]`：刪除錄影檔；`from_cloud=True` 會一併從雲端刪除。
 
 ### 分享錄影
 
-直播錄影檔通常很大，而 Discord 有上傳大小限制（一般 25 MB，依伺服器加成而不同），因此提供兩種方式：
+直播錄影檔通常很大，Discord 的上傳大小限制（一般 25 MB）多半放不下，因此以雲端／主機資料夾分享為主：
 
-- **`/record_share <filename>`**：把檔案**直接上傳到目前頻道**。僅適用於未超過該伺服器上傳上限的檔案，
-  超過時會提示改用雲端上傳或從主機取得。
 - **`/record_upload <filename>`**：用 [`rclone`](https://rclone.org/) 上傳到**雲端**（如 Google Drive），
   取得分享連結後由 Bot 貼到頻道。適合大型檔案。
+- 或直接從**主機**的錄影資料夾（`RECORDING_HOST_DIR`，預設 `./recordings`）取用檔案，自行上傳／分享。
 
 > 為什麼是 rclone 而不是 rsync？`rsync` 是走 SSH 同步到「另一台伺服器」，本身不會上傳到 Google Drive；
 > `rclone` 原生支援 Google Drive 等雲端空間，且能產生分享連結。若你想同步到自有伺服器再用網址分享，
@@ -218,8 +218,12 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 2. 依 `docker-compose.yml` 內的註解，把該 `rclone.conf` 掛載進容器，並設定 `RCLONE_CONFIG` 指向它。
 3. 在 `.env` 設定 `RCLONE_REMOTE=gdrive:vtuber-recordings`（`<遠端>:<資料夾>`）。
 
-亦可不透過 Bot，直接從**主機**的錄影資料夾（`RECORDING_HOST_DIR`，預設 `./recordings`）取用檔案，
-自行上傳或用任何檔案伺服器分享。
+### 刪除與自動清理
+
+- **手動刪除**：`/record_delete <filename>` 刪除主機上的檔案；加上 `from_cloud=True` 會同時用 rclone
+  從雲端刪除同名檔案。
+- **自動清理**：Bot 每 6 小時清一次，刪除超過 `RECORDING_RETENTION_DAYS`（預設 7 天）的錄影檔，
+  設為 `0` 可停用。**只會刪除主機上的檔案，不會動到已上傳到雲端的副本**；進行中的錄影檔不會被清除。
 
 ### 注意事項
 

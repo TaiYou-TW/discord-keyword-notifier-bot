@@ -96,6 +96,7 @@ class MyBot(
         # YouTube live-stream recording (see RecordingMixin)
         self.active_recordings = {}  # { key: {process, log_fh, started_at, ...} }
         self._recording_available_cache = None  # yt-dlp availability (cached)
+        self.recording_cleanup_task = None  # retention sweep task
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (

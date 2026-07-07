@@ -1432,19 +1432,11 @@ async def record_stop(interaction: discord.Interaction, recording_id: str):
     if out and os.path.isfile(out):
         name = os.path.basename(out)
         size = os.path.getsize(out)
-        limit = getattr(getattr(interaction, "guild", None), "filesize_limit", 0) or (
-            25 * 1024 * 1024
-        )
         options = []
         if RCLONE_REMOTE:
             options.append(f"上傳雲端並取得連結：`/record_upload {name}`")
-        if size <= limit:
-            options.append(f"直接分享到此頻道：`/record_share {name}`")
-        elif not RCLONE_REMOTE:
-            options.append(
-                f"檔案超過 Discord 上傳上限（約 {limit / 1024 / 1024:.0f} MB），"
-                f"請從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得"
-            )
+        options.append(f"從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得")
+        options.append(f"刪除：`/record_delete {name}`")
         msg = (
             f"⏹️ 已停止錄影 `{rid}`。\n"
             f"檔案：`{name}`（{size / 1024 / 1024:.1f} MB）\n"
@@ -1491,83 +1483,20 @@ async def record_files(interaction: discord.Interaction):
     if len(files) > 25:
         description += f"\n…共 {len(files)} 個檔案（僅顯示前 25 個）"
 
-    share = "`/record_upload <檔名>`（雲端）" if RCLONE_REMOTE else "`/record_share <檔名>`"
+    hint = "分享：`/record_upload <檔名>` · " if RCLONE_REMOTE else ""
     embed = discord.Embed(
         title="🎞️ 已錄製的直播",
         description=description[:4000],
         color=0xE74C3C,
         timestamp=interaction.created_at,
     )
-    embed.set_footer(text=f"分享：{share} · 目錄 {RECORDING_OUTPUT_DIR}")
+    embed.set_footer(text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}")
     await interaction.followup.send(embed=embed, ephemeral=True)
     logger.info(
         "Admin %s(%d) listed %d saved recording(s)",
         interaction.user,
         interaction.user.id,
         len(files),
-    )
-
-
-@bot.tree.command(
-    name="record_share",
-    description="[管理員] 將錄影檔直接上傳到此頻道（受 Discord 檔案大小限制）",
-)
-@app_commands.describe(filename="檔名（見 /record_files）")
-async def record_share(interaction: discord.Interaction, filename: str):
-    if interaction.user.id not in ADMIN_USER_IDS:
-        await interaction.response.send_message(
-            "❌ 此命令僅限管理員使用！", ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    path = bot.safe_recording_path(filename)
-    if not path:
-        await interaction.followup.send(
-            f"找不到檔案 `{filename.strip()}`（用 `/record_files` 確認）。",
-            ephemeral=True,
-        )
-        return
-
-    size = os.path.getsize(path)
-    limit = getattr(getattr(interaction, "guild", None), "filesize_limit", 0) or (
-        25 * 1024 * 1024
-    )
-    if size > limit:
-        hint = (
-            "，請改用 `/record_upload` 上傳雲端"
-            if RCLONE_REMOTE
-            else f"，請從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得或設定雲端上傳"
-        )
-        await interaction.followup.send(
-            f"❌ 檔案 {size / 1024 / 1024:.1f} MB 超過此伺服器上傳上限"
-            f"（約 {limit / 1024 / 1024:.0f} MB）{hint}。",
-            ephemeral=True,
-        )
-        return
-
-    channel = interaction.channel
-    if channel is None:
-        await interaction.followup.send("❌ 無法取得目前頻道。", ephemeral=True)
-        return
-
-    try:
-        await channel.send(
-            content=f"🎥 錄影分享：`{os.path.basename(path)}`",
-            file=discord.File(path),
-        )
-    except Exception as e:
-        logger.exception("Failed to upload recording %s to Discord", path)
-        await interaction.followup.send(f"⚠️ 上傳失敗：{e}", ephemeral=True)
-        return
-
-    await interaction.followup.send("✅ 已分享到此頻道。", ephemeral=True)
-    logger.info(
-        "Admin %s(%d) shared recording %s to channel %s",
-        interaction.user,
-        interaction.user.id,
-        os.path.basename(path),
-        getattr(channel, "id", "?"),
     )
 
 
@@ -1626,6 +1555,59 @@ async def record_upload(interaction: discord.Interaction, filename: str):
         interaction.user.id,
         name,
         bool(link),
+    )
+
+
+@bot.tree.command(
+    name="record_delete",
+    description="[管理員] 刪除錄影檔（可選擇一併從雲端刪除）",
+)
+@app_commands.describe(
+    filename="檔名（見 /record_files）",
+    from_cloud="是否同時從雲端刪除（預設 False）",
+)
+async def record_delete(
+    interaction: discord.Interaction, filename: str, from_cloud: bool = False
+):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    result = await bot.delete_recording(filename, from_cloud)
+    if not result.get("valid"):
+        await interaction.followup.send(
+            f"❌ 檔名無效或不允許：`{filename.strip()}`。", ephemeral=True
+        )
+        return
+
+    name = result.get("name")
+    lines = []
+    if result.get("local_deleted"):
+        lines.append("✅ 已從磁碟刪除")
+    elif result.get("local_existed"):
+        lines.append(f"⚠️ 磁碟刪除失敗：{result.get('error', '未知錯誤')}")
+    else:
+        lines.append("ℹ️ 磁碟上找不到此檔（可能已被自動清除）")
+
+    cloud = result.get("cloud")
+    if cloud == "ok":
+        lines.append("✅ 已從雲端刪除")
+    elif cloud == "no_remote":
+        lines.append("⚠️ 未設定雲端（RCLONE_REMOTE），略過雲端刪除")
+    elif isinstance(cloud, str) and cloud.startswith("error:"):
+        lines.append(f"⚠️ 雲端刪除失敗：{cloud[len('error:'):]}")
+
+    await interaction.followup.send(f"`{name}`\n" + "\n".join(lines), ephemeral=True)
+    logger.info(
+        "Admin %s(%d) deleted recording %s (from_cloud=%s, cloud=%s)",
+        interaction.user,
+        interaction.user.id,
+        name,
+        from_cloud,
+        cloud,
     )
 
 
