@@ -267,6 +267,7 @@ class RecordingMixin:
             return None
         marker = f"-{started_at}."
         try:
+            names = os.listdir(RECORDING_OUTPUT_DIR)
         except OSError:
             return None
         candidates = []
