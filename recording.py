@@ -157,7 +157,9 @@ class RecordingMixin:
             url,
         ]
 
-        log_path = os.path.join(RECORDING_OUTPUT_DIR, f"record-{key}-{started}.log")
+        safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", key)[:80] or "recording"
+        log_path = os.path.join(RECORDING_OUTPUT_DIR, f"record-{safe_key}-{started}.log")
+        log_fh = None
         try:
             log_fh = open(log_path, "wb")
             process = await asyncio.create_subprocess_exec(
@@ -167,6 +169,11 @@ class RecordingMixin:
                 stdin=asyncio.subprocess.DEVNULL,
             )
         except Exception:
+            if log_fh is not None:
+                try:
+                    log_fh.close()
+                except Exception:
+                    pass
             logger.exception("Failed to launch yt-dlp for %s", url)
             return False, "啟動 yt-dlp 失敗，請查看伺服器日誌。", None
 
