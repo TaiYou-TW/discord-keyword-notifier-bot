@@ -154,6 +154,7 @@ class RecordingMixin:
             "--restrict-filenames",
             "--cookies",
             RECORDING_COOKIE_FILE,
+            "--remote-components ejs:npm",
             "-o",
             output_template,
             "--live-from-start" if from_start else "--no-live-from-start",
