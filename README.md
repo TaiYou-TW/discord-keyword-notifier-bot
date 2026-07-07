@@ -28,11 +28,16 @@ docker compose up --build
 - `/scan_emoji_history [channel] [limit] [scan_guild] [unlimited]`：掃描歷史訊息統計表情符號使用（管理員專用）
 - `/verify_membership`：連結 YouTube 帳號驗證頻道會員資格並取得會員身分組
 - `/membership_status`：查看自己的會員驗證狀態
+- `/membership_account`：查看自己目前連結的 YouTube 帳號
 - `/membership_unlink`：解除連結並移除會員身分組
 - `/membership_add <channel_id> <role>`：新增頻道與身分組對應（管理員專用）
 - `/membership_remove <channel_id>`：移除頻道對應（管理員專用）
 - `/membership_list`：列出所有頻道對應（管理員專用）
+- `/membership_role_list`：列出本伺服器各會員身分組目前持有的成員（管理員專用）
 - `/membership_recheck`：立即重新驗證所有成員（管理員專用）
+- `/record_start <target> [from_start]`：開始錄製 YouTube 直播（管理員專用）
+- `/record_stop <recording_id>`：停止指定的直播錄影（管理員專用）
+- `/record_list`：列出進行中的直播錄影（管理員專用）
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
@@ -174,3 +179,26 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 - **會限影片前提**：探測影片必須「真的」是會限影片，否則非會員也會被判為會員（`UUMO` 播放清單即為會員限定上傳）。
 - **權限**：Bot 需具備管理該身分組的權限，且身分組位階需低於 Bot 的最高身分組。
 - Refresh token 以 `MEMBERSHIP_TOKEN_ENC_KEY` 加密儲存；請妥善保管此金鑰並提供隱私權政策。
+
+## 🎥 YouTube 直播錄影
+
+管理員可用指令請 Bot 以 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) 錄製 YouTube 直播，
+輸出檔案寫入 `RECORDING_OUTPUT_DIR`（預設 `recordings/`，透過 docker-compose 的 bind-mount
+會出現在主機的專案目錄中）。
+
+### 指令說明
+
+- `/record_start <target> [from_start=False]`：開始錄製。`target` 可為 YouTube 影片網址或
+  影片 ID（進行中的直播）；`from_start=True` 會嘗試從直播開頭錄製（需該直播開放 DVR）。
+- `/record_stop <recording_id>`：停止錄影（送出 SIGINT 讓 yt-dlp 正常收尾並寫出檔案）。
+  `recording_id` 即 `/record_list` 顯示的 ID（通常是 11 碼影片 ID）。
+- `/record_list`：列出進行中的錄影、開始時間與來源網址。
+
+### 注意事項
+
+- **相依套件**：需要 `yt-dlp`（已列於 `requirements.txt`）與 `ffmpeg`（已在 Docker image 內安裝）。
+  修改 `requirements.txt` 或 `Dockerfile` 後需 `docker compose up -d --build`。
+- **狀態不持久**：進行中的錄影只存在記憶體中。Bot 行程重啟（含 watchmedo 偵測到 `.py` 變更
+  自動重載、或容器重啟）會中斷所有錄影，已寫入的檔案仍會保留。
+- **同時上限**：由 `RECORDING_MAX_CONCURRENT` 控制（預設 3）。
+- **磁碟空間**：直播錄影檔案可能很大，請留意 `RECORDING_OUTPUT_DIR` 所在磁碟的容量。

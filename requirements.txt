@@ -4,3 +4,4 @@ watchdog
 aiohttp
 emoji
 cryptography
+yt-dlp

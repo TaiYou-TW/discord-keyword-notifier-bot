@@ -350,6 +350,29 @@ class MembershipMixin:
             logger.exception("channels.list mine=true failed")
         return None
 
+    async def get_channel_title(
+        self, session: aiohttp.ClientSession, channel_id: str
+    ) -> str | None:
+        """Best-effort channel title lookup (needs YOUTUBE_API_KEY); None if
+        unavailable. Used only to prettify display, never for verification."""
+        if not YOUTUBE_API_KEY or not channel_id:
+            return None
+        try:
+            async with session.get(
+                f"{YT_API_BASE}/channels",
+                params={"part": "snippet", "id": channel_id, "key": YOUTUBE_API_KEY},
+                timeout=15,
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                body = await resp.json()
+                items = body.get("items") or []
+                if items:
+                    return items[0].get("snippet", {}).get("title")
+        except Exception:
+            logger.debug("channel title lookup failed for %s", channel_id, exc_info=True)
+        return None
+
     async def _list_playlist_video_ids(
         self,
         session: aiohttp.ClientSession,

@@ -1,4 +1,5 @@
 import sqlite3
+import aiohttp
 import discord
 from discord import app_commands
 
@@ -7,6 +8,7 @@ from config import (
     DEFAULT_COOLDOWN,
     logger,
     ADMIN_USER_IDS,
+    RECORDING_OUTPUT_DIR,
 )
 
 
@@ -1210,4 +1212,261 @@ async def membership_list(interaction: discord.Interaction):
         lines.append(f"- `{ch}` → {role.mention if role else f'@{role_id}（找不到）'}")
     await interaction.response.send_message(
         "目前的會員驗證頻道對應：\n" + "\n".join(lines), ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="membership_account",
+    description="查看你目前連結的 YouTube 帳號",
+)
+async def membership_account(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    row = bot.get_membership_row(interaction.user.id)
+    if not row:
+        await interaction.followup.send(
+            "你尚未連結 YouTube 帳號，請使用 `/verify_membership`。", ephemeral=True
+        )
+        return
+
+    _, yt_channel_id, _, last_checked = row
+    checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+
+    if yt_channel_id:
+        url = f"https://www.youtube.com/channel/{yt_channel_id}"
+        title = None
+        try:
+            async with aiohttp.ClientSession() as session:
+                title = await bot.get_channel_title(session, yt_channel_id)
+        except Exception:
+            logger.debug("Failed to fetch channel title", exc_info=True)
+        name_line = f"[{title}]({url})" if title else url
+        description = (
+            f"目前連結的 YouTube 頻道：\n{name_line}\n"
+            f"頻道 ID：`{yt_channel_id}`\n"
+            f"最後檢查：{checked}"
+        )
+    else:
+        description = (
+            "已連結你的 YouTube 帳號，但沒有取得頻道 ID"
+            "（授權時可能未包含頻道資訊）。\n"
+            f"最後檢查：{checked}"
+        )
+
+    embed = discord.Embed(
+        title="🔗 已連結的 YouTube 帳號",
+        description=description,
+        color=0xE74C3C,
+    )
+    embed.set_footer(text="使用 /verify_membership 重新連結，/membership_unlink 解除連結")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "User %s(%d) viewed their linked YouTube account",
+        interaction.user,
+        interaction.user.id,
+    )
+
+
+@bot.tree.command(
+    name="membership_role_list",
+    description="[管理員] 列出本伺服器各會員身分組目前持有的成員",
+)
+async def membership_role_list(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    mappings = [
+        (ch, role_id)
+        for gid, ch, role_id in bot.membership_channel_map
+        if gid == guild.id
+    ]
+    if not mappings:
+        await interaction.followup.send(
+            "本伺服器尚未設定任何頻道對應，使用 `/membership_add` 新增。",
+            ephemeral=True,
+        )
+        return
+
+    # Annotate each holder with their linked YouTube channel id, if known.
+    linked = {uid: yt for uid, yt, _enc, _last in bot._all_membership_rows()}
+
+    embed = discord.Embed(
+        title=f"🎫 {guild.name} 會員身分組名單",
+        color=0x3498DB,
+        timestamp=interaction.created_at,
+    )
+    total = 0
+    for ch, role_id in mappings:
+        role = guild.get_role(role_id)
+        if role is None:
+            embed.add_field(
+                name=f"`{ch}`", value=f"@{role_id}（找不到身分組）", inline=False
+            )
+            continue
+
+        holders = role.members  # requires the member cache (warmed on_ready)
+        total += len(holders)
+        if holders:
+            lines = []
+            for member in holders[:20]:
+                yt = linked.get(member.id)
+                suffix = f"（`{yt}`）" if yt else "（未連結）"
+                lines.append(f"• {member.mention} {suffix}")
+            if len(holders) > 20:
+                lines.append(f"…以及其他 {len(holders) - 20} 位")
+            value = "\n".join(lines)
+        else:
+            value = "（目前沒有成員持有此身分組）"
+
+        embed.add_field(
+            name=f"{role.name} ← `{ch}`（{len(holders)} 人）",
+            value=value[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(text=f"共 {total} 個身分組持有記錄（依實際 Discord 身分組計算）")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed membership role holders for guild %s(%d)",
+        interaction.user,
+        interaction.user.id,
+        guild.name,
+        guild.id,
+    )
+
+
+@bot.tree.command(
+    name="record_start",
+    description="[管理員] 開始錄製 YouTube 直播",
+)
+@app_commands.describe(
+    target="YouTube 影片網址或影片 ID（進行中的直播）",
+    from_start="是否從直播開頭錄製（預設 False，從現在開始）",
+)
+async def record_start(
+    interaction: discord.Interaction, target: str, from_start: bool = False
+):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    ok, message, rec = await bot.start_recording(
+        target,
+        from_start,
+        interaction.user.id,
+        interaction.guild.id if interaction.guild else None,
+    )
+    if not ok:
+        await interaction.followup.send(
+            "❌ " + (message or "無法開始錄影。"), ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        f"🔴 已開始錄製 `{rec['key']}`"
+        + ("（從直播開頭）" if from_start else "（從現在開始）")
+        + f"\n輸出目錄：`{RECORDING_OUTPUT_DIR}`\n"
+        f"使用 `/record_list` 查看進度，`/record_stop {rec['key']}` 停止。",
+        ephemeral=True,
+    )
+    logger.info(
+        "Admin %s(%d) started recording %s (from_start=%s)",
+        interaction.user,
+        interaction.user.id,
+        rec["key"],
+        from_start,
+    )
+
+
+@bot.tree.command(
+    name="record_stop",
+    description="[管理員] 停止指定的 YouTube 直播錄影",
+)
+@app_commands.describe(recording_id="要停止的錄影 ID（見 /record_list）")
+async def record_stop(interaction: discord.Interaction, recording_id: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    stopped = await bot.stop_recording(recording_id.strip())
+    if stopped:
+        await interaction.followup.send(
+            f"⏹️ 已停止錄影 `{recording_id.strip()}`，檔案已儲存至 "
+            f"`{RECORDING_OUTPUT_DIR}`。",
+            ephemeral=True,
+        )
+        logger.info(
+            "Admin %s(%d) stopped recording %s",
+            interaction.user,
+            interaction.user.id,
+            recording_id.strip(),
+        )
+    else:
+        await interaction.followup.send(
+            f"找不到進行中的錄影 `{recording_id.strip()}`（用 `/record_list` 確認）。",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="record_list",
+    description="[管理員] 列出進行中的 YouTube 直播錄影",
+)
+async def record_list(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    recordings = bot.list_recordings()
+    if not recordings:
+        await interaction.followup.send("目前沒有進行中的錄影。", ephemeral=True)
+        return
+
+    lines = []
+    for rec in recordings:
+        started = rec.get("started_at")
+        when = f"<t:{started}:R>" if started else "?"
+        scope = "從開頭" if rec.get("from_start") else "從現在"
+        lines.append(
+            f"🔴 `{rec['key']}` — 開始於 {when}（{scope}）\n"
+            f"　　{rec.get('url', '')}"
+        )
+
+    embed = discord.Embed(
+        title="🔴 進行中的直播錄影",
+        description="\n".join(lines)[:4000],
+        color=0xE74C3C,
+        timestamp=interaction.created_at,
+    )
+    embed.set_footer(text=f"共 {len(recordings)} 個 · 用 /record_stop <ID> 停止")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed %d active recording(s)",
+        interaction.user,
+        interaction.user.id,
+        len(recordings),
     )

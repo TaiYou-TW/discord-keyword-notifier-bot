@@ -128,4 +128,13 @@ MEMBERSHIP_CHECK_INTERVAL = int(os.getenv("MEMBERSHIP_CHECK_INTERVAL", "21600"))
 # Optional URL to redirect the browser to after the OAuth callback completes.
 MEMBERSHIP_SUCCESS_REDIRECT = os.getenv("MEMBERSHIP_SUCCESS_REDIRECT", "")
 
+# YouTube live-stream recording (admin /record_* commands). Requires yt-dlp
+# (in requirements.txt) and ffmpeg (installed in the image) to mux live streams.
+# Recordings are written to RECORDING_OUTPUT_DIR; with the default compose
+# bind-mount this lands inside the repo directory on the host. yt-dlp is run as
+# `python -m yt_dlp` unless YT_DLP_PATH points at a binary.
+RECORDING_OUTPUT_DIR = os.getenv("RECORDING_OUTPUT_DIR", "recordings")
+RECORDING_MAX_CONCURRENT = int(os.getenv("RECORDING_MAX_CONCURRENT", "3"))
+YT_DLP_PATH = os.getenv("YT_DLP_PATH", "")
+
 ZERO_WIDTH_SPACE = "\u200b"
