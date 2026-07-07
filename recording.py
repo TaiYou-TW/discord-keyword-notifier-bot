@@ -261,11 +261,12 @@ class RecordingMixin:
 
     # ---- saved-file helpers --------------------------------------------------
 
-    def _find_output_file(self, key: str, started_at) -> str | None:
+    def _find_output_file(self, _key: str, started_at) -> str | None:
         """Locate the media file a recording wrote (largest non-log match)."""
-        marker = f"-{key}-{started_at}."
+        if not started_at:
+            return None
+        marker = f"-{started_at}."
         try:
-            names = os.listdir(RECORDING_OUTPUT_DIR)
         except OSError:
             return None
         candidates = []
