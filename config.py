@@ -138,6 +138,7 @@ RECORDING_MAX_CONCURRENT = int(os.getenv("RECORDING_MAX_CONCURRENT", "3"))
 YT_DLP_PATH = os.getenv("YT_DLP_PATH", "")
 # Auto-delete recordings older than this many days (disk cleanup). 0 disables.
 RECORDING_RETENTION_DAYS = int(os.getenv("RECORDING_RETENTION_DAYS", "7"))
+RECORDING_COOKIE_FILE = os.getenv("RECORDING_COOKIE_FILE", "")
 
 # Optional cloud upload for finished recordings via rclone (`/record_upload`),
 # for files too large for a direct Discord upload. RCLONE_REMOTE is an rclone
