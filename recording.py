@@ -421,7 +421,7 @@ class RecordingMixin:
 
     # ---- retention / auto-cleanup --------------------------------------------
 
-    def cleanup_old_recordings(self) -> int:
+    def cleanup_old_recordings(self, active_keys: set[str] | None = None) -> int:
         """Delete recordings (and logs) older than RECORDING_RETENTION_DAYS.
 
         Returns the number of files removed. No-op when retention <= 0. Files
@@ -434,7 +434,8 @@ class RecordingMixin:
             names = os.listdir(RECORDING_OUTPUT_DIR)
         except OSError:
             return 0
-        active_keys = set(self.active_recordings.keys())
+        if active_keys is None:
+            active_keys = set(self.active_recordings.keys())
         removed = 0
         for name in names:
             path = os.path.join(RECORDING_OUTPUT_DIR, name)
