@@ -33,4 +33,5 @@ services:
       # Create it once with `rclone config` (e.g. a Google Drive remote), then
       # set RCLONE_CONFIG=/config/rclone.conf and RCLONE_REMOTE in .env.
       # - ${RCLONE_CONFIG_HOST:-./rclone.conf}:/config/rclone.conf:ro
+      - ${RECORDING_COOKIE_FILE:-./cookies.txt}:/app/cookies.txt:ro
     restart: unless-stopped
