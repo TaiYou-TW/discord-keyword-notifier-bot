@@ -462,7 +462,8 @@ class RecordingMixin:
         await asyncio.sleep(30)  # let startup settle
         while True:
             try:
-                await asyncio.to_thread(self.cleanup_old_recordings)
+                active_keys = set(self.active_recordings.keys())
+                await asyncio.to_thread(self.cleanup_old_recordings, active_keys)
             except Exception:
                 logger.exception("Recording cleanup monitor error")
             await asyncio.sleep(RECORDING_CLEANUP_INTERVAL)
