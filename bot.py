@@ -11,6 +11,7 @@ from config import DB_PATH, logger, MENTIONED_EMOJI, MENTIONED_EMOJI2, ADMIN_USE
 from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
 from membership import MembershipMixin
+from recording import RecordingMixin
 from twitter_syndication import TwitterSyndicationMixin
 from youtube_community import YouTubeCommunityMixin
 from enums import HolodexNotifyType
@@ -52,6 +53,7 @@ class MyBot(
     HolodexMixin,
     KeywordMixin,
     MembershipMixin,
+    RecordingMixin,
     discord.Client,
 ):
     def __init__(self):
@@ -88,7 +90,13 @@ class MyBot(
         self._membership_runner = None
         self._fernet_cache = False  # sentinel: cipher not built yet
         self._probe_cache = {}  # { yt_channel_id: {"ids": [...], "ts": int} }
-        self.membership_channel_map = []  # [ (yt_channel_id, role_id), ... ]
+        # [ (guild_id, yt_channel_id, role_id), ... ]
+        self.membership_channel_map = []
+
+        # YouTube live-stream recording (see RecordingMixin)
+        self.active_recordings = {}  # { key: {process, log_fh, started_at, ...} }
+        self._recording_available_cache = None  # yt-dlp availability (cached)
+        self.recording_cleanup_task = None  # retention sweep task
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (

@@ -54,6 +54,7 @@ MEMBERSHIP_SCHEMA = """
     CREATE TABLE IF NOT EXISTS membership_oauth (
         discord_user_id INTEGER PRIMARY KEY,
         youtube_channel_id TEXT,
+        youtube_channel_title TEXT,
         refresh_token_enc TEXT NOT NULL,
         last_checked INTEGER,
         created_at INTEGER
@@ -116,6 +117,15 @@ class MembershipMixin:
 
     def ensure_membership_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(MEMBERSHIP_SCHEMA)
+        # Add youtube_channel_title to an older membership_oauth table.
+        oauth_cols = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(membership_oauth)").fetchall()
+        ]
+        if oauth_cols and "youtube_channel_title" not in oauth_cols:
+            conn.execute(
+                "ALTER TABLE membership_oauth ADD COLUMN youtube_channel_title TEXT"
+            )
         # Migrate an older single-guild membership_channels table (no guild_id)
         # by backfilling the legacy MEMBERSHIP_GUILD_ID.
         cols = [
@@ -336,23 +346,28 @@ class MembershipMixin:
 
     # ---- YouTube Data API ----------------------------------------------------
 
-    async def get_user_channel_id(
+    async def get_user_channel_info(
         self, session: aiohttp.ClientSession, access_token: str
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
+        """Return ``(channel_id, channel_title)`` for the authorized user's own
+        channel, using *their* OAuth token (channels.list mine=true). This is
+        why each user's channel name comes from their own authorization rather
+        than a shared API key."""
         try:
             async with session.get(
                 f"{YT_API_BASE}/channels",
-                params={"part": "id", "mine": "true"},
+                params={"part": "snippet", "mine": "true"},
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=20,
             ) as resp:
                 body = await resp.json()
                 items = body.get("items") if resp.status == 200 else None
                 if items:
-                    return items[0].get("id")
+                    item = items[0]
+                    return item.get("id"), item.get("snippet", {}).get("title")
         except Exception:
-            logger.exception("channels.list mine=true failed")
-        return None
+            logger.exception("channels.list mine=true (snippet) failed")
+        return None, None
 
     async def _list_playlist_video_ids(
         self,
@@ -536,21 +551,34 @@ class MembershipMixin:
     # ---- storage -------------------------------------------------------------
 
     def store_membership(
-        self, discord_user_id: int, yt_channel_id: str | None, refresh_token: str
+        self,
+        discord_user_id: int,
+        yt_channel_id: str | None,
+        yt_channel_title: str | None,
+        refresh_token: str,
     ) -> None:
         now = int(time.time())
         conn = sqlite3.connect(self.db_path)
         conn.execute(
             """
             INSERT INTO membership_oauth
-                (discord_user_id, youtube_channel_id, refresh_token_enc, last_checked, created_at)
-            VALUES (?, ?, ?, ?, ?)
+                (discord_user_id, youtube_channel_id, youtube_channel_title,
+                 refresh_token_enc, last_checked, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(discord_user_id) DO UPDATE SET
                 youtube_channel_id = excluded.youtube_channel_id,
+                youtube_channel_title = excluded.youtube_channel_title,
                 refresh_token_enc = excluded.refresh_token_enc,
                 last_checked = excluded.last_checked
             """,
-            (discord_user_id, yt_channel_id, self._encrypt(refresh_token), now, now),
+            (
+                discord_user_id,
+                yt_channel_id,
+                yt_channel_title,
+                self._encrypt(refresh_token),
+                now,
+                now,
+            ),
         )
         conn.commit()
         conn.close()
@@ -564,10 +592,20 @@ class MembershipMixin:
         conn.commit()
         conn.close()
 
+    def _set_channel_title(self, discord_user_id: int, title: str) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE membership_oauth SET youtube_channel_title=? WHERE discord_user_id=?",
+            (title, discord_user_id),
+        )
+        conn.commit()
+        conn.close()
+
     def get_membership_row(self, discord_user_id: int):
         conn = sqlite3.connect(self.db_path)
         row = conn.execute(
-            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, last_checked "
+            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, "
+            "last_checked, youtube_channel_title "
             "FROM membership_oauth WHERE discord_user_id=?",
             (discord_user_id,),
         ).fetchone()
@@ -577,7 +615,8 @@ class MembershipMixin:
     def _all_membership_rows(self):
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, last_checked "
+            "SELECT discord_user_id, youtube_channel_id, refresh_token_enc, "
+            "last_checked, youtube_channel_title "
             "FROM membership_oauth"
         ).fetchall()
         conn.close()
@@ -646,7 +685,36 @@ class MembershipMixin:
                     )
                 self._delete_membership(discord_user_id)
             return None
+        # Backfill the channel title with the member's own OAuth if we don't
+        # have it yet (e.g. linked before titles were recorded).
+        row = self.get_membership_row(discord_user_id)
+        if row is not None and not row[4]:
+            _cid, title = await self.get_user_channel_info(session, access_token)
+            if title:
+                self._set_channel_title(discord_user_id, title)
         return await self.check_all_channels(session, discord_user_id, access_token)
+
+    async def refresh_channel_title(self, discord_user_id: int) -> str | None:
+        """Fetch and cache the member's YouTube channel title using *their own*
+        OAuth token. Returns the title, or None if unavailable."""
+        row = self.get_membership_row(discord_user_id)
+        if not row:
+            return None
+        try:
+            refresh_token = self._decrypt(row[2])
+        except Exception:
+            logger.exception("Failed to decrypt token for %d", discord_user_id)
+            return None
+        async with aiohttp.ClientSession() as session:
+            access_token, _revoked = await self.refresh_access_token(
+                session, refresh_token
+            )
+            if not access_token:
+                return None
+            _cid, title = await self.get_user_channel_info(session, access_token)
+        if title:
+            self._set_channel_title(discord_user_id, title)
+        return title
 
     async def unlink_membership(self, discord_user_id: int) -> bool:
         row = self.get_membership_row(discord_user_id)
@@ -669,7 +737,7 @@ class MembershipMixin:
             return
         logger.info("Re-checking membership for %d linked user(s)", len(rows))
         async with aiohttp.ClientSession() as session:
-            for discord_user_id, _yt, refresh_token_enc, _last in rows:
+            for discord_user_id, _yt, refresh_token_enc, _last, _title in rows:
                 try:
                     refresh_token = self._decrypt(refresh_token_enc)
                 except Exception:
@@ -760,12 +828,15 @@ class MembershipMixin:
                 )
             refresh_token = tokens["refresh_token"]
             access_token = tokens.get("access_token")
-            yt_channel_id = (
-                await self.get_user_channel_id(session, access_token)
-                if access_token
-                else None
+            if access_token:
+                yt_channel_id, yt_channel_title = await self.get_user_channel_info(
+                    session, access_token
+                )
+            else:
+                yt_channel_id, yt_channel_title = None, None
+            self.store_membership(
+                discord_user_id, yt_channel_id, yt_channel_title, refresh_token
             )
-            self.store_membership(discord_user_id, yt_channel_id, refresh_token)
             results = (
                 await self.check_all_channels(session, discord_user_id, access_token)
                 if access_token

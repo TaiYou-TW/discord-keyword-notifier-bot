@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import discord
 from discord import app_commands
@@ -7,6 +8,8 @@ from config import (
     DEFAULT_COOLDOWN,
     logger,
     ADMIN_USER_IDS,
+    RCLONE_REMOTE,
+    RECORDING_OUTPUT_DIR,
 )
 
 
@@ -700,7 +703,7 @@ async def membership_status(interaction: discord.Interaction):
         )
         return
 
-    _, _yt_channel_id, _, last_checked = row
+    _, _yt_channel_id, _, last_checked, _title = row
     checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
 
     guild = interaction.guild
@@ -930,4 +933,442 @@ async def membership_list(interaction: discord.Interaction):
         lines.append(f"- `{ch}` → {role.mention if role else f'@{role_id}（找不到）'}")
     await interaction.response.send_message(
         "目前的會員驗證頻道對應：\n" + "\n".join(lines), ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="membership_account",
+    description="查看你目前連結的 YouTube 帳號",
+)
+async def membership_account(interaction: discord.Interaction):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    row = bot.get_membership_row(interaction.user.id)
+    if not row:
+        await interaction.followup.send(
+            "你尚未連結 YouTube 帳號，請使用 `/verify_membership`。", ephemeral=True
+        )
+        return
+
+    _, yt_channel_id, _, last_checked, yt_channel_title = row
+    checked = f"<t:{last_checked}:R>" if last_checked else "尚未檢查"
+
+    # Look up the channel name with the member's own OAuth authorization
+    # (not a shared API key) and cache it, if we don't already have it.
+    if yt_channel_id and not yt_channel_title:
+        try:
+            yt_channel_title = await bot.refresh_channel_title(interaction.user.id)
+        except Exception:
+            logger.debug("Failed to refresh channel title", exc_info=True)
+
+    if yt_channel_id:
+        url = f"https://www.youtube.com/channel/{yt_channel_id}"
+        display = yt_channel_title or yt_channel_id
+        description = (
+            f"目前連結的 YouTube 頻道：\n[{display}]({url})\n"
+            f"頻道 ID：`{yt_channel_id}`\n"
+            f"最後檢查：{checked}"
+        )
+    else:
+        description = (
+            "已連結你的 YouTube 帳號，但沒有取得頻道資訊"
+            "（授權時可能未包含頻道資訊）。\n"
+            f"最後檢查：{checked}"
+        )
+
+    embed = discord.Embed(
+        title="🔗 已連結的 YouTube 帳號",
+        description=description,
+        color=0xE74C3C,
+    )
+    embed.set_footer(text="使用 /verify_membership 重新連結，/membership_unlink 解除連結")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "User %s(%d) viewed their linked YouTube account",
+        interaction.user,
+        interaction.user.id,
+    )
+
+
+@bot.tree.command(
+    name="membership_role_list",
+    description="[管理員] 列出本伺服器各會員身分組目前持有的成員",
+)
+async def membership_role_list(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    mappings = [
+        (ch, role_id)
+        for gid, ch, role_id in bot.membership_channel_map
+        if gid == guild.id
+    ]
+    if not mappings:
+        await interaction.followup.send(
+            "本伺服器尚未設定任何頻道對應，使用 `/membership_add` 新增。",
+            ephemeral=True,
+        )
+        return
+
+    # Annotate each holder with their linked YouTube channel (name if known).
+    linked = {
+        uid: (yt, title)
+        for uid, yt, _enc, _last, title in bot._all_membership_rows()
+    }
+
+    embed = discord.Embed(
+        title=f"🎫 {guild.name} 會員身分組名單",
+        color=0x3498DB,
+        timestamp=interaction.created_at,
+    )
+    total = 0
+    for ch, role_id in mappings:
+        role = guild.get_role(role_id)
+        if role is None:
+            embed.add_field(
+                name=f"`{ch}`", value=f"@{role_id}（找不到身分組）", inline=False
+            )
+            continue
+
+        holders = role.members  # requires the member cache (warmed on_ready)
+        total += len(holders)
+        if holders:
+            lines = []
+            for member in holders[:20]:
+                info = linked.get(member.id)
+                if info:
+                    yt_id, yt_title = info
+                    label = yt_title or yt_id or "已連結"
+                    suffix = f"（{label}）"
+                else:
+                    suffix = "（未連結）"
+                lines.append(f"• {member.mention} {suffix}")
+            if len(holders) > 20:
+                lines.append(f"…以及其他 {len(holders) - 20} 位")
+            value = "\n".join(lines)
+        else:
+            value = "（目前沒有成員持有此身分組）"
+
+        embed.add_field(
+            name=f"{role.name} ← `{ch}`（{len(holders)} 人）",
+            value=value[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(text=f"共 {total} 個身分組持有記錄（依實際 Discord 身分組計算）")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed membership role holders for guild %s(%d)",
+        interaction.user,
+        interaction.user.id,
+        guild.name,
+        guild.id,
+    )
+
+
+@bot.tree.command(
+    name="record_start",
+    description="[管理員] 開始錄製 YouTube 直播",
+)
+@app_commands.describe(
+    target="YouTube 影片網址或影片 ID（進行中的直播）",
+    from_start="是否從直播開頭錄製（預設 False，從現在開始）",
+)
+async def record_start(
+    interaction: discord.Interaction, target: str, from_start: bool = False
+):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    ok, message, rec = await bot.start_recording(
+        target,
+        from_start,
+        interaction.user.id,
+        interaction.guild.id if interaction.guild else None,
+    )
+    if not ok:
+        await interaction.followup.send(
+            "❌ " + (message or "無法開始錄影。"), ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        f"🔴 已開始錄製 `{rec['key']}`"
+        + ("（從直播開頭）" if from_start else "（從現在開始）")
+        + f"\n輸出目錄：`{RECORDING_OUTPUT_DIR}`\n"
+        f"使用 `/record_list` 查看進度，`/record_stop {rec['key']}` 停止。",
+        ephemeral=True,
+    )
+    logger.info(
+        "Admin %s(%d) started recording %s (from_start=%s)",
+        interaction.user,
+        interaction.user.id,
+        rec["key"],
+        from_start,
+    )
+
+
+@bot.tree.command(
+    name="record_stop",
+    description="[管理員] 停止指定的 YouTube 直播錄影",
+)
+@app_commands.describe(recording_id="要停止的錄影 ID（見 /record_list）")
+async def record_stop(interaction: discord.Interaction, recording_id: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    rid = recording_id.strip()
+    rec = await bot.stop_recording(rid)
+    if not rec:
+        await interaction.followup.send(
+            f"找不到進行中的錄影 `{rid}`（用 `/record_list` 確認）。", ephemeral=True
+        )
+        return
+
+    out = rec.get("output_file")
+    if out and os.path.isfile(out):
+        name = os.path.basename(out)
+        size = os.path.getsize(out)
+        options = []
+        if RCLONE_REMOTE:
+            options.append(f"上傳雲端並取得連結：`/record_upload {name}`")
+        options.append(f"從主機錄影資料夾 `{RECORDING_OUTPUT_DIR}` 取得")
+        options.append(f"刪除：`/record_delete {name}`")
+        msg = (
+            f"⏹️ 已停止錄影 `{rid}`。\n"
+            f"檔案：`{name}`（{size / 1024 / 1024:.1f} MB）\n"
+            + "\n".join(f"• {o}" for o in options)
+        )
+    else:
+        msg = (
+            f"⏹️ 已停止錄影 `{rid}`，但找不到輸出檔（可能仍在寫出）。"
+            f"輸出目錄：`{RECORDING_OUTPUT_DIR}`。"
+        )
+
+    await interaction.followup.send(msg, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) stopped recording %s", interaction.user, interaction.user.id, rid
+    )
+
+
+@bot.tree.command(
+    name="record_files",
+    description="[管理員] 列出已錄製完成的直播檔案",
+)
+async def record_files(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    files = bot.list_saved_recordings()
+    if not files:
+        await interaction.followup.send(
+            f"錄影資料夾 `{RECORDING_OUTPUT_DIR}` 中沒有檔案。", ephemeral=True
+        )
+        return
+
+    lines = []
+    for f in files[:25]:
+        lines.append(
+            f"• `{f['name']}` — {f['size'] / 1024 / 1024:.1f} MB · "
+            f"<t:{f['mtime']}:R>"
+        )
+    description = "\n".join(lines)
+    if len(files) > 25:
+        description += f"\n…共 {len(files)} 個檔案（僅顯示前 25 個）"
+
+    hint = "分享：`/record_upload <檔名>` · " if RCLONE_REMOTE else ""
+    embed = discord.Embed(
+        title="🎞️ 已錄製的直播",
+        description=description[:4000],
+        color=0xE74C3C,
+        timestamp=interaction.created_at,
+    )
+    embed.set_footer(text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed %d saved recording(s)",
+        interaction.user,
+        interaction.user.id,
+        len(files),
+    )
+
+
+@bot.tree.command(
+    name="record_upload",
+    description="[管理員] 上傳錄影檔到雲端（rclone）並在此頻道貼出連結",
+)
+@app_commands.describe(filename="檔名（見 /record_files）")
+async def record_upload(interaction: discord.Interaction, filename: str):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+    if not RCLONE_REMOTE:
+        await interaction.response.send_message(
+            "❌ 尚未設定雲端上傳（請設定 `RCLONE_REMOTE`，見 README）。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    path = bot.safe_recording_path(filename)
+    if not path:
+        await interaction.followup.send(
+            f"找不到檔案 `{filename.strip()}`（用 `/record_files` 確認）。",
+            ephemeral=True,
+        )
+        return
+
+    name = os.path.basename(path)
+    await interaction.followup.send(
+        f"☁️ 開始上傳 `{name}` 到雲端，完成後會在此頻道貼出連結…", ephemeral=True
+    )
+    ok, link, err = await bot.upload_recording(path)
+    if not ok:
+        await interaction.followup.send(f"⚠️ 上傳失敗：{err}", ephemeral=True)
+        return
+
+    channel = interaction.channel
+    text = f"🎥 錄影上傳完成：`{name}`" + (f"\n{link}" if link else "")
+    if channel is not None:
+        try:
+            await channel.send(text)
+        except Exception:
+            logger.exception("Failed to post upload link to channel")
+    await interaction.followup.send(
+        "✅ 已上傳並貼出連結。"
+        if link
+        else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。",
+        ephemeral=True,
+    )
+    logger.info(
+        "Admin %s(%d) uploaded recording %s to cloud (link=%s)",
+        interaction.user,
+        interaction.user.id,
+        name,
+        bool(link),
+    )
+
+
+@bot.tree.command(
+    name="record_delete",
+    description="[管理員] 刪除錄影檔（可選擇一併從雲端刪除）",
+)
+@app_commands.describe(
+    filename="檔名（見 /record_files）",
+    from_cloud="是否同時從雲端刪除（預設 False）",
+)
+async def record_delete(
+    interaction: discord.Interaction, filename: str, from_cloud: bool = False
+):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    result = await bot.delete_recording(filename, from_cloud)
+    if not result.get("valid"):
+        await interaction.followup.send(
+            f"❌ 檔名無效或不允許：`{filename.strip()}`。", ephemeral=True
+        )
+        return
+
+    name = result.get("name")
+    lines = []
+    if result.get("local_deleted"):
+        lines.append("✅ 已從磁碟刪除")
+    elif result.get("local_existed"):
+        lines.append(f"⚠️ 磁碟刪除失敗：{result.get('error', '未知錯誤')}")
+    else:
+        lines.append("ℹ️ 磁碟上找不到此檔（可能已被自動清除）")
+
+    cloud = result.get("cloud")
+    if cloud == "ok":
+        lines.append("✅ 已從雲端刪除")
+    elif cloud == "no_remote":
+        lines.append("⚠️ 未設定雲端（RCLONE_REMOTE），略過雲端刪除")
+    elif isinstance(cloud, str) and cloud.startswith("error:"):
+        lines.append(f"⚠️ 雲端刪除失敗：{cloud[len('error:'):]}")
+
+    await interaction.followup.send(f"`{name}`\n" + "\n".join(lines), ephemeral=True)
+    logger.info(
+        "Admin %s(%d) deleted recording %s (from_cloud=%s, cloud=%s)",
+        interaction.user,
+        interaction.user.id,
+        name,
+        from_cloud,
+        cloud,
+    )
+
+
+@bot.tree.command(
+    name="record_list",
+    description="[管理員] 列出進行中的 YouTube 直播錄影",
+)
+async def record_list(interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message(
+            "❌ 此命令僅限管理員使用！", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    recordings = bot.list_recordings()
+    if not recordings:
+        await interaction.followup.send("目前沒有進行中的錄影。", ephemeral=True)
+        return
+
+    lines = []
+    for rec in recordings:
+        started = rec.get("started_at")
+        when = f"<t:{started}:R>" if started else "?"
+        scope = "從開頭" if rec.get("from_start") else "從現在"
+        lines.append(
+            f"🔴 `{rec['key']}` — 開始於 {when}（{scope}）\n"
+            f"　　{rec.get('url', '')}"
+        )
+
+    embed = discord.Embed(
+        title="🔴 進行中的直播錄影",
+        description="\n".join(lines)[:4000],
+        color=0xE74C3C,
+        timestamp=interaction.created_at,
+    )
+    embed.set_footer(text=f"共 {len(recordings)} 個 · 用 /record_stop <ID> 停止")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+    logger.info(
+        "Admin %s(%d) listed %d active recording(s)",
+        interaction.user,
+        interaction.user.id,
+        len(recordings),
     )

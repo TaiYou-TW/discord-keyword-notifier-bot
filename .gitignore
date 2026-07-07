@@ -1,6 +1,7 @@
 .env
 error.log
 keywords.db
+recordings/
 
 venv/
 __pycache__/

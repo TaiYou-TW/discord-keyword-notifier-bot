@@ -4,6 +4,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# ffmpeg: required by yt-dlp to mux/remux recorded live streams.
+# rclone: optional cloud upload of recordings (/record_upload) to Google Drive etc.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg rclone \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

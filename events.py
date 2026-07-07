@@ -7,6 +7,7 @@ from config import (
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
     MEMBERSHIP_CHECK_INTERVAL,
+    RECORDING_RETENTION_DAYS,
     TWITTER_NOTIFY_CHANNEL_ID,
     TWITTER_POLL_INTERVAL,
     TWITTER_SCREEN_NAMES,
@@ -74,6 +75,19 @@ async def on_ready():
         ):
             bot.membership_monitor_task = bot.loop.create_task(
                 bot.membership_monitor()
+            )
+
+    if RECORDING_RETENTION_DAYS > 0:
+        logger.info(
+            "Starting recording retention cleanup (delete files older than %d day(s))",
+            RECORDING_RETENTION_DAYS,
+        )
+        if (
+            bot.recording_cleanup_task is None
+            or bot.recording_cleanup_task.done()
+        ):
+            bot.recording_cleanup_task = bot.loop.create_task(
+                bot.recording_cleanup_monitor()
             )
 
 
