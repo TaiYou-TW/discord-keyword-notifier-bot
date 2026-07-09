@@ -191,9 +191,9 @@ class KeywordMixin:
                     image_urls.append(attachment.url)
         if message.embeds:
             for embed_obj in message.embeds:
-                if embed_obj.image and embed_obj.image.url:
+                if embed_obj.image and embed_obj.image.url and not embed_obj.image.is_spoiler():
                     image_urls.append(embed_obj.image.url)
-                elif embed_obj.thumbnail and embed_obj.thumbnail.url:
+                elif embed_obj.thumbnail and embed_obj.thumbnail.url and not embed_obj.thumbnail.is_spoiler():
                     image_urls.append(embed_obj.thumbnail.url)
 
         # Deduplicate while preserving order
@@ -209,13 +209,17 @@ class KeywordMixin:
 
         server_name = message.guild.name if message.guild else "私人訊息"
         channel_name = message.channel.name if message.channel else "未知頻道"
+        message_author = message.author.name if message.author else "未知使用者"
+        message_author_avatar = (
+            message.author.avatar.url if message.author and message.author.avatar else None
+        )
         server_icon = (
             message.guild.icon.url if message.guild and message.guild.icon else None
         )
 
         embed.description = f"{message.content[:NOTIFICATION_MAX_DESCRIPTION_LENGTH]}{'...' if len(message.content) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ''}"
 
-        author_icon_url = None
+        embed_author_icon_url = None
         if message.embeds:
             embed_parts: list[str] = []
             for orig in message.embeds:
@@ -225,8 +229,8 @@ class KeywordMixin:
                         orig.author.icon_url if orig.author.icon_url else None
                     )
                     author_name = orig.author.name
-                    if author_image and not author_icon_url:
-                        author_icon_url = author_image
+                    if author_image and not embed_author_icon_url:
+                        embed_author_icon_url = author_image
                     section.append(f"**{author_name}**\n")
                 if orig.title:
                     section.append(f"**{orig.title}**\n")
@@ -243,13 +247,14 @@ class KeywordMixin:
                 nested = f"{nested[:NOTIFICATION_MAX_DESCRIPTION_LENGTH]}{'...' if len(nested) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ''}"
                 embed.add_field(name=ZERO_WIDTH_SPACE, value=nested, inline=True)
 
-        if not image_urls and author_icon_url:
-            embed.set_thumbnail(url=author_icon_url)
+        if not image_urls and embed_author_icon_url:
+            embed.set_thumbnail(url=embed_author_icon_url)
 
         if image_urls:
             embed.set_image(url=image_urls[0])
 
         embed.set_footer(text=f"{server_name}﹥＃{channel_name}", icon_url=server_icon)
+        embed.set_author(name=f"{message_author}", icon_url=message_author_avatar)
 
         view = ChannelMuteView(
             channel_id=message.channel.id,

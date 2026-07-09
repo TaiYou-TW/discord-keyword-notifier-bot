@@ -15,7 +15,6 @@ from config import (
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
     HOLODEX_MEMORY_LIMIT,
-    NOTIFICATION_MAX_DESCRIPTION_LENGTH,
     logger,
 )
 from enums import HolodexNotifyType
@@ -337,9 +336,9 @@ class HolodexMixin:
 
         for source in sources:
             if is_org:
-                live_url = f"https://holodex.net/api/v2/live?org={source}&include=live_info,description"
+                live_url = f"https://holodex.net/api/v2/live?org={source}&include=live_info"
             else:
-                live_url = f"https://holodex.net/api/v2/live?channel_id={source}&include=live_info,description"
+                live_url = f"https://holodex.net/api/v2/live?channel_id={source}&include=live_info"
 
             try:
                 async with session.get(live_url, headers=headers, timeout=20) as resp:
@@ -408,9 +407,9 @@ class HolodexMixin:
 
             # 2) Check latest uploads (limit 5 to handle multiple new videos)
             if is_org:
-                upload_url = f"https://holodex.net/api/v2/videos?org={source}&sort=published_at&limit=5&type=stream&include=live_info,description"
+                upload_url = f"https://holodex.net/api/v2/videos?org={source}&sort=published_at&limit=5&type=stream&include=live_info"
             else:
-                upload_url = f"https://holodex.net/api/v2/videos?channel_id={source}&sort=published_at&limit=5&type=stream&include=live_info,description"
+                upload_url = f"https://holodex.net/api/v2/videos?channel_id={source}&sort=published_at&limit=5&type=stream&include=live_info"
 
             try:
                 async with session.get(upload_url, headers=headers, timeout=20) as resp:
@@ -520,16 +519,8 @@ class HolodexMixin:
             title = f"🎬 新影片：{stream_title or ''}"
             color = 0x3498DB
 
-        desc_text = stream.get("description") or ""
-        embed_description = ""
-        if desc_text:
-            embed_description = desc_text[:NOTIFICATION_MAX_DESCRIPTION_LENGTH] + (
-                "..." if len(desc_text) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ""
-            )
-
         embed = discord.Embed(
             title=title,
-            description=embed_description,
             url=stream_url,
             color=color,
         )
