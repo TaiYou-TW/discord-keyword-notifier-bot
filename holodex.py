@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 import sqlite3
-
+import re
 import aiohttp
 import discord
 
@@ -344,7 +344,12 @@ class HolodexMixin:
                 params["channel_id"] = source
 
             try:
-                async with session.get(f"{HOLODEX_BASE_URL}/live", params=params, headers=headers, timeout=20) as resp:
+                async with session.get(
+                    f"{HOLODEX_BASE_URL}/live",
+                    params=params,
+                    headers=headers,
+                    timeout=20,
+                ) as resp:
                     if resp.status != 200:
                         logger.warning(
                             "Holodex API returned %d for source %s", resp.status, source
@@ -409,14 +414,24 @@ class HolodexMixin:
             )
 
             # 2) Check latest uploads (limit 5 to handle multiple new videos)
-            params = {"sort": "published_at", "limit": 5, "type": "stream", "include": "live_info,description"}
+            params = {
+                "sort": "published_at",
+                "limit": 5,
+                "type": "stream",
+                "include": "live_info,description",
+            }
             if is_org:
                 params["org"] = source
             else:
                 params["channel_id"] = source
 
             try:
-                async with session.get(f"{HOLODEX_BASE_URL}/videos", params=params, headers=headers, timeout=20) as resp:
+                async with session.get(
+                    f"{HOLODEX_BASE_URL}/videos",
+                    params=params,
+                    headers=headers,
+                    timeout=20,
+                ) as resp:
                     if resp.status != 200:
                         logger.warning(
                             "Holodex upload API returned %d for source %s",
@@ -524,6 +539,12 @@ class HolodexMixin:
             color = 0x3498DB
 
         desc_text = stream.get("description") or ""
+
+        # remove holodex's credit line in description for placeholders
+        # e.g. >>: 22050 mod, is admin.
+        CREDIT_LINE_PATTERN = r"^>>: \d+ \w+, is \w+\.$"
+        desc_text = re.sub(CREDIT_LINE_PATTERN, "", desc_text.strip()).strip()
+
         embed_description = ""
         if desc_text:
             embed_description = desc_text[:NOTIFICATION_MAX_DESCRIPTION_LENGTH] + (
