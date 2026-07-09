@@ -13,6 +13,71 @@ from config import (
 )
 
 
+def _iter_leaf_commands():
+    for command in bot.tree.walk_commands():
+        if getattr(command, "parent", None) is not None:
+            continue
+        if command.name == "help":
+            continue
+        yield command
+
+
+def _is_admin_command(command):
+    return (command.description or "").startswith("[管理員]")
+
+
+@bot.tree.command(name="help", description="查看所有可用指令")
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    is_admin = interaction.user.id in ADMIN_USER_IDS
+    commands = sorted(_iter_leaf_commands(), key=lambda command: command.name)
+    normal_commands = [
+        command for command in commands if not _is_admin_command(command)
+    ]
+    admin_commands = [command for command in commands if _is_admin_command(command)]
+
+    sections = []
+    if normal_commands:
+        sections.append(
+            "一般指令：\n"
+            + "\n".join(
+                f"/{command.name} - {command.description or '無描述'}"
+                for command in normal_commands
+            )
+        )
+    if is_admin and admin_commands:
+        sections.append(
+            "管理員指令：\n"
+            + "\n".join(
+                f"/{command.name} - {command.description or '無描述'}"
+                for command in admin_commands
+            )
+        )
+
+    if sections:
+        msg = "\n\n".join(sections)
+    else:
+        msg = "目前沒有可用指令。"
+
+    embed = discord.Embed(
+        title="📖 指令列表",
+        description=msg,
+        color=0x3498DB,
+        timestamp=interaction.created_at,
+    )
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.exception(
+            "Error sending help command list to user %s(%d): %s",
+            interaction.user,
+            interaction.user.id,
+            e,
+        )
+
+
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
 @app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
@@ -986,7 +1051,9 @@ async def membership_account(interaction: discord.Interaction):
         description=description,
         color=0xE74C3C,
     )
-    embed.set_footer(text="使用 /verify_membership 重新連結，/membership_unlink 解除連結")
+    embed.set_footer(
+        text="使用 /verify_membership 重新連結，/membership_unlink 解除連結"
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
     logger.info(
         "User %s(%d) viewed their linked YouTube account",
@@ -1027,8 +1094,7 @@ async def membership_role_list(interaction: discord.Interaction):
 
     # Annotate each holder with their linked YouTube channel (name if known).
     linked = {
-        uid: (yt, title)
-        for uid, yt, _enc, _last, title in bot._all_membership_rows()
+        uid: (yt, title) for uid, yt, _enc, _last, title in bot._all_membership_rows()
     }
 
     embed = discord.Embed(
@@ -1210,7 +1276,9 @@ async def record_files(interaction: discord.Interaction):
         color=0xE74C3C,
         timestamp=interaction.created_at,
     )
-    embed.set_footer(text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}")
+    embed.set_footer(
+        text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}"
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
     logger.info(
         "Admin %s(%d) listed %d saved recording(s)",
@@ -1264,9 +1332,11 @@ async def record_upload(interaction: discord.Interaction, filename: str):
         except Exception:
             logger.exception("Failed to post upload link to channel")
     await interaction.followup.send(
-        "✅ 已上傳並貼出連結。"
-        if link
-        else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。",
+        (
+            "✅ 已上傳並貼出連結。"
+            if link
+            else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。"
+        ),
         ephemeral=True,
     )
     logger.info(
