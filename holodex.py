@@ -540,9 +540,9 @@ class HolodexMixin:
 
         desc_text = stream.get("description") or ""
 
-        # remove holodex's credit line in description for placeholders
-        # e.g. >>: 22050 mod, is admin.
-        CREDIT_LINE_PATTERN = r"^>>: \d+ \w+, is \w+\.$"
+        # remove Holodex's credit line in description for placeholders
+        # e.g. >>: 22050 mod, is admin. or >>: 22050 mod w/ APIKEY.
+        CREDIT_LINE_PATTERN = r"^>>: \d+[\w\s,\/]+\.$"
         desc_text = re.sub(CREDIT_LINE_PATTERN, "", desc_text.strip()).strip()
 
         embed_description = ""
