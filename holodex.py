@@ -507,7 +507,7 @@ class HolodexMixin:
         stream_title = stream.get("title") or "No title"
         channel_name = stream.get("channel", {}).get("name") or "Unknown Channel"
         stream_id = stream.get("id")
-        stream_url = stream.get("url")
+        stream_url = stream.get("link")
         if not stream_url and stream_id:
             stream_url = f"https://www.youtube.com/watch?v={stream_id}"
 
