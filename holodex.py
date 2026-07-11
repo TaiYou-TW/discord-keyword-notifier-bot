@@ -543,7 +543,9 @@ class HolodexMixin:
         # remove Holodex's credit line in description for placeholders
         # e.g. >>: 22050 mod, is admin. or >>: 22050 mod w/ APIKEY.
         CREDIT_LINE_PATTERN = r"^>>: \d+[\w\s,\/]+\.$"
-        desc_text = re.sub(CREDIT_LINE_PATTERN, "", desc_text.strip()).strip()
+        desc_text = re.sub(
+            CREDIT_LINE_PATTERN, "", desc_text.strip(), flags=re.MULTILINE
+        ).strip()
 
         embed_description = ""
         if desc_text:
