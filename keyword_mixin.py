@@ -191,9 +191,9 @@ class KeywordMixin:
                     image_urls.append(attachment.url)
         if message.embeds:
             for embed_obj in message.embeds:
-                if embed_obj.image and embed_obj.image.url and not embed_obj.image.is_spoiler():
+                if embed_obj.image and embed_obj.image.url:
                     image_urls.append(embed_obj.image.url)
-                elif embed_obj.thumbnail and embed_obj.thumbnail.url and not embed_obj.thumbnail.is_spoiler():
+                elif embed_obj.thumbnail and embed_obj.thumbnail.url:
                     image_urls.append(embed_obj.thumbnail.url)
 
         # Deduplicate while preserving order
@@ -211,7 +211,9 @@ class KeywordMixin:
         channel_name = message.channel.name if message.channel else "未知頻道"
         message_author = message.author.name if message.author else "未知使用者"
         message_author_avatar = (
-            message.author.avatar.url if message.author and message.author.avatar else None
+            message.author.avatar.url
+            if message.author and message.author.avatar
+            else None
         )
         server_icon = (
             message.guild.icon.url if message.guild and message.guild.icon else None
