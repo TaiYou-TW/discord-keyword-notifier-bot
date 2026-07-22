@@ -806,9 +806,11 @@ async def verify_membership(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🔗 YouTube 會員驗證",
         description=(
-            "點擊下方連結，使用你的 Google 帳號授權，"
-            "Bot 會確認你是否為指定頻道的會員並自動給予身分組。\n\n"
+            "**步驟 1／2：連結 Google 帳號**\n"
+            "點擊下方連結，使用你的 Google 帳號授權。\n\n"
             f"**[點此開始授權]({url})**\n\n"
+            "**步驟 2／2**：授權完成後，用 `/membership_link` 選擇你要驗證的會員頻道。"
+            "Bot 只會驗證你選擇的頻道並給予對應身分組（不會逐一檢查全部頻道）。\n\n"
             "⚠️ 此連結僅限你本人使用、15 分鐘內有效，請勿分享。"
         ),
         color=0xE74C3C,
@@ -818,6 +820,161 @@ async def verify_membership(interaction: discord.Interaction):
         "User %s(%d) started membership verification",
         interaction.user,
         interaction.user.id,
+    )
+
+
+def _channel_choice_label(guild: discord.Guild, yt_channel_id: str, role_id: int) -> str:
+    """Human label for a mapped channel: the role name (what members recognize),
+    falling back to the channel id."""
+    role = guild.get_role(role_id) if role_id else None
+    return role.name if role else yt_channel_id
+
+
+async def _mapped_channel_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete over the guild's mapped channels (value = channel id)."""
+    guild = interaction.guild
+    if guild is None:
+        return []
+    current = (current or "").lower()
+    choices: list[app_commands.Choice[str]] = []
+    for ch, role_id in bot.guild_channel_mappings(guild.id):
+        label = _channel_choice_label(guild, ch, role_id)
+        if current and current not in label.lower() and current not in ch.lower():
+            continue
+        choices.append(app_commands.Choice(name=label[:100], value=ch))
+        if len(choices) >= 25:
+            break
+    return choices
+
+
+async def _selected_channel_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete over the channels the caller has opted into (value = id)."""
+    guild = interaction.guild
+    if guild is None:
+        return []
+    current = (current or "").lower()
+    selected = bot.get_user_selections(interaction.user.id, guild.id)
+    choices: list[app_commands.Choice[str]] = []
+    for ch in sorted(selected):
+        role_id = bot.get_channel_role(guild.id, ch)
+        label = _channel_choice_label(guild, ch, role_id)
+        if current and current not in label.lower() and current not in ch.lower():
+            continue
+        choices.append(app_commands.Choice(name=label[:100], value=ch))
+        if len(choices) >= 25:
+            break
+    return choices
+
+
+@bot.tree.command(
+    name="membership_link",
+    description="選擇你要驗證的 YouTube 會員頻道並取得對應身分組",
+)
+@app_commands.describe(channel="開始輸入以搜尋本伺服器可驗證的會員頻道")
+@app_commands.autocomplete(channel=_mapped_channel_autocomplete)
+async def membership_link(interaction: discord.Interaction, channel: str):
+    if not bot.membership_enabled:
+        await interaction.response.send_message(
+            "❌ 此伺服器尚未啟用 YouTube 會員驗證功能。", ephemeral=True
+        )
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    channel = channel.strip()
+    role_id = bot.get_channel_role(interaction.guild.id, channel)
+    if role_id is None:
+        await interaction.followup.send(
+            "找不到此頻道的對應（請從選單挑選；若清單是空的，請管理員先用 "
+            "`/membership_add` 設定）。",
+            ephemeral=True,
+        )
+        return
+    if not bot.get_membership_row(interaction.user.id):
+        await interaction.followup.send(
+            "請先用 `/verify_membership` 連結你的 YouTube 帳號，再選擇頻道。",
+            ephemeral=True,
+        )
+        return
+
+    role = interaction.guild.get_role(role_id)
+    role_name = role.name if role else f"@{role_id}"
+
+    # Opt in, then verify just this one channel (1 quota unit for a member).
+    bot.add_user_selection(interaction.user.id, interaction.guild.id, channel)
+    is_member = await bot.verify_single_channel(
+        interaction.user.id, interaction.guild.id, channel, role_id
+    )
+    if is_member is True:
+        msg = f"✅ 已確認你是會員，已授予 {role_name}，之後會定期自動維持。"
+    elif is_member is False:
+        # Not a member — don't keep probing this channel for them.
+        bot.remove_user_selection(interaction.user.id, interaction.guild.id, channel)
+        msg = (
+            f"❌ 未偵測到你是此頻道的會員，未授予 {role_name}。\n"
+            "請確認你是用「有付費會員的那個 Google 帳號」登入，然後重試。"
+        )
+    else:
+        msg = (
+            f"⚠️ 目前無法確認此頻道的會員資格，已加入你的驗證清單（{role_name}），"
+            "稍後會自動重試。"
+        )
+    await interaction.followup.send(msg, ephemeral=True)
+    logger.info(
+        "User %s(%d) linked channel %s in guild %s -> %s",
+        interaction.user,
+        interaction.user.id,
+        channel,
+        interaction.guild.id,
+        is_member,
+    )
+
+
+@bot.tree.command(
+    name="membership_unlink_channel",
+    description="從你的驗證清單移除某個頻道並移除對應身分組",
+)
+@app_commands.describe(channel="要移除的頻道（開始輸入以搜尋你已選擇的頻道）")
+@app_commands.autocomplete(channel=_selected_channel_autocomplete)
+async def membership_unlink_channel(interaction: discord.Interaction, channel: str):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ 請在伺服器中使用此指令。", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    channel = channel.strip()
+    removed = bot.remove_user_selection(
+        interaction.user.id, interaction.guild.id, channel
+    )
+    role_id = bot.get_channel_role(interaction.guild.id, channel)
+    if role_id is not None:
+        await bot.apply_member_role(
+            interaction.user.id, interaction.guild.id, role_id, False
+        )
+    if removed:
+        await interaction.followup.send(
+            f"✅ 已從你的驗證清單移除 `{channel}` 並移除對應身分組。", ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            f"你的驗證清單中沒有 `{channel}`。", ephemeral=True
+        )
+    logger.info(
+        "User %s(%d) unlinked channel %s in guild %s",
+        interaction.user,
+        interaction.user.id,
+        channel,
+        interaction.guild.id,
     )
 
 
@@ -847,19 +1004,6 @@ async def membership_status(interaction: discord.Interaction):
         )
         return
 
-    mappings = [
-        (ch, role_id)
-        for gid, ch, role_id in bot.membership_channel_map
-        if gid == guild.id
-    ]
-    if not mappings:
-        await interaction.followup.send(
-            f"已連結你的 YouTube 帳號，但本伺服器尚未設定任何驗證頻道。\n最後檢查：{checked}",
-            ephemeral=True,
-        )
-        return
-
-    # Report per-channel status from the member's actual roles (source of truth).
     member = guild.get_member(interaction.user.id)
     if member is None:
         try:
@@ -867,18 +1011,44 @@ async def membership_status(interaction: discord.Interaction):
         except Exception:
             member = None
 
+    # Show the channels the member opted into via /membership_link. For members
+    # who linked before opt-in existed, fall back to the mapped roles they
+    # currently hold so their status still shows something meaningful.
+    selected = bot.get_user_selections(interaction.user.id, guild.id)
+    if not selected and member is not None:
+        selected = {
+            ch
+            for ch, role_id in bot.guild_channel_mappings(guild.id)
+            if any(r.id == role_id for r in member.roles)
+        }
+    if not selected:
+        await interaction.followup.send(
+            "你尚未選擇任何要驗證的頻道。請用 `/membership_link` 選擇你有付費會員的頻道。\n"
+            f"最後檢查：{checked}",
+            ephemeral=True,
+        )
+        return
+
     lines = []
-    for _, role_id in mappings:
-        has_role = bool(member) and any(r.id == role_id for r in member.roles)
-        role = guild.get_role(role_id)
-        role_name = role.name if role else f"@{role_id}"
-        if not has_role:
-            continue
-        lines.append(f"✅ {role_name}")
+    for ch in sorted(selected):
+        role_id = bot.get_channel_role(guild.id, ch)
+        role = guild.get_role(role_id) if role_id is not None else None
+        has_role = (
+            member is not None
+            and role_id is not None
+            and any(r.id == role_id for r in member.roles)
+        )
+        if role is not None:
+            role_name = role.name
+        elif role_id is not None:
+            role_name = f"@{role_id}"
+        else:
+            role_name = "（對應已被移除）"
+        lines.append(f"{'✅' if has_role else '❌'} {role_name}（`{ch}`）")
 
     await _send_paginated_lines(
         interaction,
-        "你在本伺服器的 YouTube 會員驗證狀態：",
+        "你在本伺服器已選擇驗證的頻道與狀態：",
         lines,
         footer=f"最後檢查：{checked}",
     )

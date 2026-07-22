@@ -26,10 +26,12 @@ docker compose up --build
 - `/emoji_received_stats`：查看自己收到最多的表情回應（reaction）與次數
 - `/emoji_received_rank [top]`：查看本伺服器收到最多表情回應的成員排行榜（管理員專用）
 - `/scan_emoji_history [channel] [limit] [scan_guild] [unlimited]`：掃描歷史訊息統計表情符號使用（管理員專用）
-- `/verify_membership`：連結 YouTube 帳號驗證頻道會員資格並取得會員身分組
-- `/membership_status`：查看自己的會員驗證狀態
+- `/verify_membership`：連結 YouTube 帳號（步驟 1，僅需一次）
+- `/membership_link <channel>`：選擇你要驗證的會員頻道並取得身分組（步驟 2，可多次；支援自動完成）
+- `/membership_unlink_channel <channel>`：從你的驗證清單移除某個頻道並移除身分組
+- `/membership_status`：查看自己已選擇驗證的頻道與狀態
 - `/membership_account`：查看自己目前連結的 YouTube 帳號
-- `/membership_unlink`：解除連結並移除會員身分組
+- `/membership_unlink`：完全解除連結並移除所有會員身分組
 - `/membership_add <channel_id> <role>`：新增頻道與身分組對應（管理員專用）
 - `/membership_remove <channel_id>`：移除頻道對應（管理員專用）
 - `/membership_list`：列出所有頻道對應（管理員專用）
@@ -148,16 +150,16 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 
 ### 運作原理
 
-1. 成員執行 `/verify_membership`，取得專屬 Google 授權連結（`youtube.force-ssl`；讀取會限影片留言需要此範圍，`youtube.readonly` 會回傳 403 insufficientPermissions）。
+1. 成員執行 `/verify_membership`，取得專屬 Google 授權連結（`youtube.force-ssl`；讀取會限影片留言需要此範圍，`youtube.readonly` 會回傳 403 insufficientPermissions）。授權**只需一次**。
 2. 授權後 Bot 儲存其 refresh token（以 Fernet 加密）。
-3. 以該成員的權杖對頻道**會限影片**呼叫 `commentThreads.list`：`200`＝會員、`403`＝非會員。
-4. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
-   （例：`UCxxxx` → 播放清單 `UUMOxxxx`）。
+3. 成員用 `/membership_link` **自行選擇**要驗證的頻道（可多次、支援自動完成，依身分組名稱搜尋）。Bot **只驗證成員選擇的頻道**，而非逐一檢查全部頻道 —— 這是控制 API 配額的關鍵。
+4. 以該成員的權杖對所選頻道的**會限影片**呼叫 `commentThreads.list`：`200`＝會員、`403`＝非會員。
+5. 會限影片自動從「會員限定上傳」播放清單取得：把頻道 ID 的 `UC` 前綴換成 `UUMO`
+   （例：`UCxxxx` → 播放清單 `UUMOxxxx`），並將結果快取於資料庫，避免每次重列。
 
-**多頻道、多伺服器**：由於授權是「以使用者為單位」（非以頻道、也非以伺服器為單位），成員只需 `/verify_membership`
-**授權一次**，Bot 就會用同一個權杖檢查所有已設定頻道，並在**每一個**設有對應且該成員符合資格的伺服器授予對應身分組。
-對應由各伺服器的管理員在自己的伺服器內以指令即時管理（`/membership_add`、`/membership_remove`、`/membership_list`），
-每筆對應會記錄其所屬伺服器，存於資料庫（可跨多個伺服器，同一個頻道在不同伺服器可對應不同身分組），無需改設定或重啟。
+**多頻道、多伺服器**：授權是「以使用者為單位」，成員 `/verify_membership` **授權一次**後，於各伺服器用 `/membership_link` 選擇該伺服器要驗證的頻道即可。對應由各伺服器管理員以指令即時管理（`/membership_add`、`/membership_remove`、`/membership_list`），存於資料庫（可跨伺服器，同一頻道在不同伺服器可對應不同身分組），無需改設定或重啟。
+
+> **升級相容**：既有已驗證的成員無需重做 —— 首次重新檢查時，Bot 會依成員**目前持有的會員身分組**自動補上對應的選擇，之後照常維持。
 
 ### 設定步驟
 
@@ -174,11 +176,22 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 4. 於 `.env` 填入 `GOOGLE_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`、`MEMBERSHIP_TOKEN_ENC_KEY`
    （用 `cryptography.fernet` 產生），建議另設 `YOUTUBE_API_KEY` 以穩定列出會限播放清單。
    `MEMBERSHIP_GUILD_ID` 現為選用（僅用於自舊版單一伺服器設定升級時的資料轉移）。詳見 `.env.example`。
-5. 啟動後由各伺服器管理員在該伺服器內以 `/membership_add <channel_id> <role>` 建立頻道與身分組的對應（可多個、可跨多個伺服器）。
+5. 啟動後由各伺服器管理員在該伺服器內以 `/membership_add <channel_id> <role>` 建立頻道與身分組的對應（可多個、可跨多個伺服器）。成員再各自用 `/membership_link` 選擇要驗證的頻道。
+
+### 配額與擴充性
+
+`commentThreads.list`／`playlistItems.list` 皆為每次 1 unit，預設專案配額為 **10,000/日**。因為驗證必須用「每位成員自己的權杖」逐一探測，成本會隨「成員數 × 頻道數」成長，所以本專案以下列方式壓低用量：
+
+- **成員自選頻道（opt-in）**：只探測成員用 `/membership_link` 選擇的頻道，而非全部（一個掛 63 個頻道的大型伺服器，若每位成員只選自己有的 1～2 個，用量會從「成員數 × 63」降到「成員數 × 1～2」）。
+- **只在需要時探測**：跳過成員未加入的伺服器所屬頻道。
+- **每頻道只探測 1 部影片**（`MEMBERSHIP_MAX_PROBE_VIDEOS`）：會員第一次探測即為 `200`；多探測只會在非會員上多花配額。
+- **每位成員最多每天重驗一次**（`MEMBERSHIP_RECHECK_MIN_INTERVAL`，預設 20h），且監控在達到 `MEMBERSHIP_DAILY_QUOTA`（預設 9000）時停止，隔日重置後續驗，避免直接觸頂報錯。
+- **播放清單快取於資料庫**（`MEMBERSHIP_PROBE_TTL`，預設 24h），重啟後不需重列。
+
+若你的伺服器規模仍會超過配額，可向 Google 申請提高 YouTube Data API 配額。
 
 ### 注意事項
 
-- **配額**：`commentThreads.list` 每次 1 unit，預設專案配額 10,000/日且所有成員共用，故 `MEMBERSHIP_CHECK_INTERVAL` 預設 6 小時，勿設太短。
 - **會限影片前提**：探測影片必須「真的」是會限影片，否則非會員也會被判為會員（`UUMO` 播放清單即為會員限定上傳）。
 - **權限**：Bot 需具備管理該身分組的權限，且身分組位階需低於 Bot 的最高身分組。
 - Refresh token 以 `MEMBERSHIP_TOKEN_ENC_KEY` 加密儲存；請妥善保管此金鑰並提供隱私權政策。

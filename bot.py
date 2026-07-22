@@ -92,6 +92,9 @@ class MyBot(
         self._probe_cache = {}  # { yt_channel_id: {"ids": [...], "ts": int} }
         # [ (guild_id, yt_channel_id, role_id), ... ]
         self.membership_channel_map = []
+        # Soft daily quota accounting for YouTube API calls (MembershipMixin).
+        self._quota_used = 0
+        self._quota_day = None
 
         # YouTube live-stream recording (see RecordingMixin)
         self.active_recordings = {}  # { key: {process, log_fh, started_at, ...} }

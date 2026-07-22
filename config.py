@@ -122,10 +122,26 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 # Fernet key (base64, 32 bytes) to encrypt stored refresh tokens at rest.
 # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 MEMBERSHIP_TOKEN_ENC_KEY = os.getenv("MEMBERSHIP_TOKEN_ENC_KEY", "")
-# How often (seconds) to re-verify every linked member. commentThreads.list is
-# 1 quota unit and the default project quota is 10k/day shared across all
-# users' checks, so keep this generous.
+# How often (seconds) the monitor wakes to re-verify members. Each wake only
+# re-checks members whose last check is older than MEMBERSHIP_RECHECK_MIN_INTERVAL,
+# so a shorter wake mainly means newly-linked channels get picked up sooner.
 MEMBERSHIP_CHECK_INTERVAL = int(os.getenv("MEMBERSHIP_CHECK_INTERVAL", "21600"))
+# Minimum time (seconds) between re-checks of the same member. YouTube memberships
+# renew monthly, so ~once/day is plenty and keeps quota usage low. Default 20h.
+MEMBERSHIP_RECHECK_MIN_INTERVAL = int(
+    os.getenv("MEMBERSHIP_RECHECK_MIN_INTERVAL", "72000")
+)
+# How many members-only videos to probe per channel before deciding. Members
+# pass on the first probe; extra probes only cost quota on non-members, so keep
+# this at 1 unless a channel's latest members-only upload often has comments off.
+MEMBERSHIP_MAX_PROBE_VIDEOS = int(os.getenv("MEMBERSHIP_MAX_PROBE_VIDEOS", "1"))
+# Soft daily cap (units) for membership API calls. The YouTube Data API default
+# project quota is 10k/day; the monitor stops re-checking once this is reached
+# and resumes after the daily reset, so it degrades gracefully instead of erroring.
+MEMBERSHIP_DAILY_QUOTA = int(os.getenv("MEMBERSHIP_DAILY_QUOTA", "9000"))
+# How long (seconds) a channel's discovered members-only probe videos stay fresh
+# in the DB before re-listing them (they rarely change). Default 24h.
+MEMBERSHIP_PROBE_TTL = int(os.getenv("MEMBERSHIP_PROBE_TTL", "86400"))
 # Optional URL to redirect the browser to after the OAuth callback completes.
 MEMBERSHIP_SUCCESS_REDIRECT = os.getenv("MEMBERSHIP_SUCCESS_REDIRECT", "")
 
