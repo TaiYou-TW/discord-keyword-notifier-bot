@@ -12,6 +12,75 @@ from config import (
     RECORDING_OUTPUT_DIR,
 )
 
+# Discord hard limits we page under: 2000 chars per message content, and for
+# embeds 25 fields / ~6000 chars each. These helpers split long output across
+# multiple ephemeral follow-up messages so commands don't fail on big servers
+# with many linked channels/members.
+_CONTENT_LIMIT = 1900
+_EMBED_CHAR_BUDGET = 5500
+
+
+async def _send_paginated_lines(
+    interaction: discord.Interaction,
+    header: str,
+    lines: list[str],
+    footer: str | None = None,
+) -> None:
+    """Send header + lines (+ optional footer) as one or more ephemeral messages,
+    each under Discord's content-length limit. Interaction must be deferred."""
+    blocks: list[str] = []
+    current = header
+    for raw in list(lines) + ([footer] if footer else []):
+        line = raw if len(raw) <= _CONTENT_LIMIT else raw[:_CONTENT_LIMIT]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > _CONTENT_LIMIT and current:
+            blocks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        blocks.append(current)
+    for block in blocks:
+        await interaction.followup.send(block, ephemeral=True)
+
+
+async def _send_paginated_embeds(
+    interaction: discord.Interaction,
+    title: str,
+    color: int,
+    fields: list[tuple[str, str]],
+    footer: str | None = None,
+    timestamp=None,
+) -> None:
+    """Split (name, value) fields across as many embeds as needed (<=25 fields
+    and a safe char budget each) and send each as an ephemeral follow-up.
+    Interaction must be deferred."""
+
+    def _new_embed(first: bool) -> discord.Embed:
+        em = discord.Embed(title=title if first else f"{title}（續）", color=color)
+        if timestamp is not None:
+            em.timestamp = timestamp
+        return em
+
+    embeds: list[discord.Embed] = []
+    current = _new_embed(True)
+    current_chars = len(current.title or "")
+    for name, value in fields:
+        name = name[:256]
+        value = value[:1024]
+        cost = len(name) + len(value)
+        if len(current.fields) >= 25 or current_chars + cost > _EMBED_CHAR_BUDGET:
+            embeds.append(current)
+            current = _new_embed(False)
+            current_chars = len(current.title or "")
+        current.add_field(name=name, value=value, inline=False)
+        current_chars += cost
+    embeds.append(current)
+    if footer:
+        embeds[-1].set_footer(text=footer)
+    for em in embeds:
+        await interaction.followup.send(embed=em, ephemeral=True)
+
 
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
 @app_commands.describe(seconds="冷卻時間（秒）")
@@ -1021,11 +1090,11 @@ async def membership_status(interaction: discord.Interaction):
         role_name = role.name if role else f"@{role_id}"
         lines.append(f"{'✅' if has_role else '❌'} `{ch}` → {role_name}")
 
-    await interaction.followup.send(
-        "你在本伺服器的 YouTube 會員驗證狀態：\n"
-        + "\n".join(lines)
-        + f"\n最後檢查：{checked}",
-        ephemeral=True,
+    await _send_paginated_lines(
+        interaction,
+        "你在本伺服器的 YouTube 會員驗證狀態：",
+        lines,
+        footer=f"最後檢查：{checked}",
     )
 
 
@@ -1207,12 +1276,13 @@ async def membership_list(interaction: discord.Interaction):
         )
         return
 
+    await interaction.response.defer(ephemeral=True)
     lines = []
     for ch, role_id in mappings:
         role = guild.get_role(role_id)
         lines.append(f"- `{ch}` → {role.mention if role else f'@{role_id}（找不到）'}")
-    await interaction.response.send_message(
-        "目前的會員驗證頻道對應：\n" + "\n".join(lines), ephemeral=True
+    await _send_paginated_lines(
+        interaction, "目前的會員驗證頻道對應：", lines
     )
 
 
@@ -1311,18 +1381,12 @@ async def membership_role_list(interaction: discord.Interaction):
         for uid, yt, _enc, _last, title in bot._all_membership_rows()
     }
 
-    embed = discord.Embed(
-        title=f"🎫 {guild.name} 會員身分組名單",
-        color=0x3498DB,
-        timestamp=interaction.created_at,
-    )
+    fields: list[tuple[str, str]] = []
     total = 0
     for ch, role_id in mappings:
         role = guild.get_role(role_id)
         if role is None:
-            embed.add_field(
-                name=f"`{ch}`", value=f"@{role_id}（找不到身分組）", inline=False
-            )
+            fields.append((f"`{ch}`", f"@{role_id}（找不到身分組）"))
             continue
 
         holders = role.members  # requires the member cache (warmed on_ready)
@@ -1344,14 +1408,16 @@ async def membership_role_list(interaction: discord.Interaction):
         else:
             value = "（目前沒有成員持有此身分組）"
 
-        embed.add_field(
-            name=f"{role.name} ← `{ch}`（{len(holders)} 人）",
-            value=value[:1024],
-            inline=False,
-        )
+        fields.append((f"{role.name} ← `{ch}`（{len(holders)} 人）", value))
 
-    embed.set_footer(text=f"共 {total} 個身分組持有記錄（依實際 Discord 身分組計算）")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await _send_paginated_embeds(
+        interaction,
+        f"🎫 {guild.name} 會員身分組名單",
+        0x3498DB,
+        fields,
+        footer=f"共 {total} 個身分組持有記錄（依實際 Discord 身分組計算）",
+        timestamp=interaction.created_at,
+    )
     logger.info(
         "Admin %s(%d) listed membership role holders for guild %s(%d)",
         interaction.user,
