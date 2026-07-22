@@ -16,6 +16,7 @@ from config import (
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
     HOLODEX_MEMORY_LIMIT,
+    NOTIFICATION_MAX_DESCRIPTION_LENGTH,
     logger,
 )
 from enums import HolodexNotifyType
