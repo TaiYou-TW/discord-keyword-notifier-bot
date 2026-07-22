@@ -16,7 +16,6 @@ from config import (
     HOLODEX_ORG,
     HOLODEX_POLL_INTERVAL,
     HOLODEX_MEMORY_LIMIT,
-    NOTIFICATION_MAX_DESCRIPTION_LENGTH,
     logger,
 )
 from enums import HolodexNotifyType
@@ -339,6 +338,7 @@ class HolodexMixin:
         for source in sources:
             params = {"include": "live_info,description", "type": "placeholder,stream"}
             if is_org:
+
                 params["org"] = source
             else:
                 params["channel_id"] = source
@@ -555,7 +555,6 @@ class HolodexMixin:
 
         embed = discord.Embed(
             title=title,
-            description=embed_description,
             url=stream_url,
             color=color,
         )
