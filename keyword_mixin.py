@@ -191,9 +191,9 @@ class KeywordMixin:
                     image_urls.append(attachment.url)
         if message.embeds:
             for embed_obj in message.embeds:
-                if embed_obj.image and embed_obj.image.url and not embed_obj.image.is_spoiler():
+                if embed_obj.image and embed_obj.image.url:
                     image_urls.append(embed_obj.image.url)
-                elif embed_obj.thumbnail and embed_obj.thumbnail.url and not embed_obj.thumbnail.is_spoiler():
+                elif embed_obj.thumbnail and embed_obj.thumbnail.url:
                     image_urls.append(embed_obj.thumbnail.url)
 
         # Deduplicate while preserving order
