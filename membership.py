@@ -13,6 +13,7 @@ uploads playlist: replace the "UC" channel-id prefix with "UUMO".
 
 import asyncio
 import base64
+import datetime
 import hashlib
 import hmac
 import os
@@ -30,10 +31,14 @@ from config import (
     GOOGLE_OAUTH_CLIENT_SECRET,
     GOOGLE_OAUTH_REDIRECT_URI,
     MEMBERSHIP_CHECK_INTERVAL,
+    MEMBERSHIP_DAILY_QUOTA,
     MEMBERSHIP_GUILD_ID,
+    MEMBERSHIP_MAX_PROBE_VIDEOS,
     MEMBERSHIP_OAUTH_HOST,
     MEMBERSHIP_OAUTH_PORT,
     MEMBERSHIP_OAUTH_SCOPE,
+    MEMBERSHIP_PROBE_TTL,
+    MEMBERSHIP_RECHECK_MIN_INTERVAL,
     MEMBERSHIP_SUCCESS_REDIRECT,
     MEMBERSHIP_TOKEN_ENC_KEY,
     YOUTUBE_API_KEY,
@@ -45,11 +50,6 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 YT_API_BASE = "https://www.googleapis.com/youtube/v3"
 
-# Probe at most this many members-only videos before giving up (quota control).
-MAX_PROBE_VIDEOS = 3
-# Cache auto-discovered probe video ids for this long.
-PROBE_CACHE_TTL = 3600
-
 MEMBERSHIP_SCHEMA = """
     CREATE TABLE IF NOT EXISTS membership_oauth (
         discord_user_id INTEGER PRIMARY KEY,
@@ -58,6 +58,29 @@ MEMBERSHIP_SCHEMA = """
         refresh_token_enc TEXT NOT NULL,
         last_checked INTEGER,
         created_at INTEGER
+    )
+"""
+
+# Which channels a member has opted into being verified for, per guild. Only
+# these channels are probed for that member, so a server can map many channels
+# without every member costing a probe against every one of them.
+MEMBERSHIP_SELECTIONS_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS membership_selections (
+        discord_user_id INTEGER NOT NULL,
+        guild_id INTEGER NOT NULL,
+        yt_channel_id TEXT NOT NULL,
+        created_at INTEGER,
+        PRIMARY KEY (discord_user_id, guild_id, yt_channel_id)
+    )
+"""
+
+# Cached members-only probe video ids per channel (persisted so we don't re-list
+# the UUMO playlist on every restart / cycle). Refreshed per MEMBERSHIP_PROBE_TTL.
+MEMBERSHIP_PROBE_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS membership_probe_videos (
+        yt_channel_id TEXT PRIMARY KEY,
+        video_ids TEXT,
+        fetched_at INTEGER
     )
 """
 
@@ -160,6 +183,8 @@ class MembershipMixin:
             logger.info("membership_channels migration complete.")
         else:
             conn.execute(MEMBERSHIP_CHANNELS_SCHEMA)
+        conn.execute(MEMBERSHIP_SELECTIONS_SCHEMA)
+        conn.execute(MEMBERSHIP_PROBE_SCHEMA)
 
     # ---- channel -> role mappings (admin-managed) ----------------------------
 
@@ -210,6 +235,20 @@ class MembershipMixin:
         if removed:
             self.load_membership_channels()
         return removed
+
+    def guild_channel_mappings(self, guild_id: int) -> list[tuple[str, int]]:
+        """[(yt_channel_id, role_id), ...] configured in this guild."""
+        return [
+            (ch, role_id)
+            for g, ch, role_id in self.membership_channel_map
+            if g == guild_id
+        ]
+
+    def get_channel_role(self, guild_id: int, yt_channel_id: str) -> int | None:
+        for g, ch, role_id in self.membership_channel_map:
+            if g == guild_id and ch == yt_channel_id:
+                return role_id
+        return None
 
     # ---- refresh-token encryption at rest ------------------------------------
 
@@ -351,6 +390,7 @@ class MembershipMixin:
         channel, using *their* OAuth token (channels.list mine=true). This is
         why each user's channel name comes from their own authorization rather
         than a shared API key."""
+        self._note_quota(1)
         try:
             async with session.get(
                 f"{YT_API_BASE}/channels",
@@ -385,6 +425,7 @@ class MembershipMixin:
             headers["Authorization"] = f"Bearer {access_token}"
         else:
             return []
+        self._note_quota(1)
         try:
             async with session.get(
                 f"{YT_API_BASE}/playlistItems",
@@ -409,6 +450,29 @@ class MembershipMixin:
             logger.exception("playlistItems.list request error")
             return []
 
+    def _load_probe_from_db(self, yt_channel_id: str) -> dict | None:
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT video_ids, fetched_at FROM membership_probe_videos "
+            "WHERE yt_channel_id=?",
+            (yt_channel_id,),
+        ).fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        return {"ids": row[0].split(","), "ts": row[1] or 0}
+
+    def _save_probe_to_db(self, yt_channel_id: str, ids: list[str], ts: int) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO membership_probe_videos (yt_channel_id, video_ids, fetched_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(yt_channel_id) DO UPDATE SET "
+            "video_ids=excluded.video_ids, fetched_at=excluded.fetched_at",
+            (yt_channel_id, ",".join(ids), ts),
+        )
+        conn.commit()
+        conn.close()
+
     async def get_probe_video_ids(
         self,
         session: aiohttp.ClientSession,
@@ -416,21 +480,31 @@ class MembershipMixin:
         access_token: str | None = None,
     ) -> list[str]:
         now = int(time.time())
+        # L1: in-memory cache.
         cached = self._probe_cache.get(yt_channel_id)
-        if cached and now - cached["ts"] < PROBE_CACHE_TTL:
+        if cached and now - cached["ts"] < MEMBERSHIP_PROBE_TTL:
             return cached["ids"]
+        # L2: DB (persists across restarts, avoids re-listing the playlist).
+        db_cached = self._load_probe_from_db(yt_channel_id)
+        if db_cached and now - db_cached["ts"] < MEMBERSHIP_PROBE_TTL:
+            self._probe_cache[yt_channel_id] = db_cached
+            return db_cached["ids"]
+        # Miss: list the members-only uploads playlist (costs 1 quota unit).
         playlist_id = members_only_playlist_id(yt_channel_id)
         if not playlist_id:
-            return cached["ids"] if cached else []
+            return (cached or db_cached or {}).get("ids", [])
         vids = await self._list_playlist_video_ids(session, playlist_id, access_token)
         if vids:
             self._probe_cache[yt_channel_id] = {"ids": vids, "ts": now}
+            self._save_probe_to_db(yt_channel_id, vids, now)
             return vids
-        return cached["ids"] if cached else []
+        # Fall back to any stale cache if the fetch failed.
+        return (cached or db_cached or {}).get("ids", [])
 
     async def _probe_comment_thread(
         self, session: aiohttp.ClientSession, video_id: str, access_token: str
     ) -> tuple[int, str]:
+        self._note_quota(1)
         try:
             async with session.get(
                 f"{YT_API_BASE}/commentThreads",
@@ -461,7 +535,7 @@ class MembershipMixin:
             )
             return None
         results: list[tuple[int, str]] = []
-        for video_id in probe_videos[:MAX_PROBE_VIDEOS]:
+        for video_id in probe_videos[:MEMBERSHIP_MAX_PROBE_VIDEOS]:
             status, reason = await self._probe_comment_thread(
                 session, video_id, access_token
             )
@@ -628,24 +702,109 @@ class MembershipMixin:
         conn.commit()
         conn.close()
 
+    # ---- per-user channel selections (opt-in) --------------------------------
+
+    def get_user_selections(self, discord_user_id: int, guild_id: int) -> set[str]:
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT yt_channel_id FROM membership_selections "
+            "WHERE discord_user_id=? AND guild_id=?",
+            (discord_user_id, guild_id),
+        ).fetchall()
+        conn.close()
+        return {r[0] for r in rows}
+
+    def add_user_selection(
+        self, discord_user_id: int, guild_id: int, yt_channel_id: str
+    ) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT OR IGNORE INTO membership_selections "
+            "(discord_user_id, guild_id, yt_channel_id, created_at) VALUES (?, ?, ?, ?)",
+            (discord_user_id, guild_id, yt_channel_id, int(time.time())),
+        )
+        conn.commit()
+        conn.close()
+
+    def remove_user_selection(
+        self, discord_user_id: int, guild_id: int, yt_channel_id: str
+    ) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.execute(
+            "DELETE FROM membership_selections "
+            "WHERE discord_user_id=? AND guild_id=? AND yt_channel_id=?",
+            (discord_user_id, guild_id, yt_channel_id),
+        )
+        removed = cur.rowcount > 0
+        conn.commit()
+        conn.close()
+        return removed
+
+    def _delete_all_selections(self, discord_user_id: int) -> None:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "DELETE FROM membership_selections WHERE discord_user_id=?",
+            (discord_user_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    # ---- daily quota accounting (soft cap) -----------------------------------
+    # Approximate: resets on UTC date change rather than exactly at YouTube's
+    # midnight-Pacific reset, and lives in memory (resets on restart). The
+    # budget carries headroom (< 10k) so the approximation stays safe.
+
+    @staticmethod
+    def _current_quota_day() -> str:
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    def _note_quota(self, units: int = 1) -> None:
+        day = self._current_quota_day()
+        if getattr(self, "_quota_day", None) != day:
+            self._quota_day = day
+            self._quota_used = 0
+        self._quota_used = getattr(self, "_quota_used", 0) + units
+
+    def quota_remaining(self) -> int:
+        if getattr(self, "_quota_day", None) != self._current_quota_day():
+            return MEMBERSHIP_DAILY_QUOTA
+        return MEMBERSHIP_DAILY_QUOTA - getattr(self, "_quota_used", 0)
+
     # ---- verification orchestration ------------------------------------------
 
     async def check_all_channels(
         self, session: aiohttp.ClientSession, discord_user_id: int, access_token: str
     ) -> dict:
-        """Check every configured channel with one token and sync each role.
+        """Check the member's opted-in channels (in guilds they're in) with one
+        token and sync each role.
 
         Returns {(guild_id, yt_channel_id): True | False | None}. None
         (inconclusive) leaves that mapping's role untouched.
         """
         results: dict[tuple[int, str], bool | None] = {}
-        # A channel's membership result is guild-independent, so probe each
-        # distinct channel only once even if it's mapped in several guilds.
+
+        # Build the set of (guild, channel, role) to actually check:
+        #  - only guilds the member is currently in (lever 1), and
+        #  - only channels the member opted into (seeded from roles they already
+        #    hold, for members who linked before opt-in existed).
+        to_check = await self._selected_mappings_for(discord_user_id)
+
+        # A channel's result is guild-independent, so probe each distinct
+        # selected channel only once even if mapped in several guilds.
         channel_cache: dict[str, bool | None] = {}
-        for guild_id, yt_channel_id, role_id in self.membership_channel_map:
+        deferred = False
+        for guild_id, yt_channel_id, role_id in to_check:
             if yt_channel_id in channel_cache:
                 is_member = channel_cache[yt_channel_id]
             else:
+                if self.quota_remaining() <= 0:
+                    logger.warning(
+                        "Daily membership quota budget reached; deferring remaining "
+                        "checks for user %d",
+                        discord_user_id,
+                    )
+                    deferred = True
+                    break
                 is_member = await self.check_is_member(
                     session, access_token, yt_channel_id
                 )
@@ -666,8 +825,81 @@ class MembershipMixin:
                 await self.apply_member_role(
                     discord_user_id, guild_id, role_id, is_member
                 )
-        self._touch_last_checked(discord_user_id)
+        # Only mark as checked if we finished; otherwise stay "due" for retry.
+        if not deferred:
+            self._touch_last_checked(discord_user_id)
         return results
+
+    async def _selected_mappings_for(
+        self, discord_user_id: int
+    ) -> list[tuple[int, str, int]]:
+        """Resolve which (guild_id, yt_channel_id, role_id) mappings apply to a
+        member: guilds they're in, restricted to their opted-in channels."""
+        by_guild: dict[int, list[tuple[str, int]]] = {}
+        for guild_id, yt_channel_id, role_id in self.membership_channel_map:
+            by_guild.setdefault(guild_id, []).append((yt_channel_id, role_id))
+
+        to_check: list[tuple[int, str, int]] = []
+        for guild_id, maps in by_guild.items():
+            guild = self.get_guild(guild_id)
+            if guild is None:
+                continue
+            member = guild.get_member(discord_user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(discord_user_id)
+                except Exception:
+                    member = None
+            if member is None:
+                continue  # not in this guild — nothing to grant here
+            selected = self.get_user_selections(discord_user_id, guild_id)
+            if not selected:
+                # Migration: seed selections from mapped roles the member
+                # already holds, so existing members keep being verified.
+                held = {
+                    ch
+                    for ch, role_id in maps
+                    if any(r.id == role_id for r in member.roles)
+                }
+                for ch in held:
+                    self.add_user_selection(discord_user_id, guild_id, ch)
+                selected = held
+            for ch, role_id in maps:
+                if ch in selected:
+                    to_check.append((guild_id, ch, role_id))
+        return to_check
+
+    async def verify_single_channel(
+        self,
+        discord_user_id: int,
+        guild_id: int,
+        yt_channel_id: str,
+        role_id: int,
+    ) -> bool | None:
+        """Verify one channel on demand (used by /membership_link) and sync its
+        role. Returns True/False/None (inconclusive)."""
+        row = self.get_membership_row(discord_user_id)
+        if not row:
+            return None
+        try:
+            refresh_token = self._decrypt(row[2])
+        except Exception:
+            logger.exception("Failed to decrypt token for %d", discord_user_id)
+            return None
+        async with aiohttp.ClientSession() as session:
+            access_token, _revoked = await self.refresh_access_token(
+                session, refresh_token
+            )
+            if not access_token:
+                return None
+            is_member = await self.check_is_member(
+                session, access_token, yt_channel_id
+            )
+        if is_member is not None:
+            await self.apply_member_role(
+                discord_user_id, guild_id, role_id, is_member
+            )
+        return is_member
 
     async def verify_membership(
         self, session: aiohttp.ClientSession, discord_user_id: int, refresh_token: str
@@ -683,6 +915,7 @@ class MembershipMixin:
                     await self.apply_member_role(
                         discord_user_id, guild_id, role_id, False
                     )
+                self._delete_all_selections(discord_user_id)
                 self._delete_membership(discord_user_id)
             return None
         # Backfill the channel title with the member's own OAuth if we don't
@@ -730,6 +963,7 @@ class MembershipMixin:
             )
         for guild_id, _ch, role_id in self.membership_channel_map:
             await self.apply_member_role(discord_user_id, guild_id, role_id, False)
+        self._delete_all_selections(discord_user_id)
         self._delete_membership(discord_user_id)
         return True
 
@@ -737,9 +971,34 @@ class MembershipMixin:
         rows = self._all_membership_rows()
         if not rows:
             return
-        logger.info("Re-checking membership for %d linked user(s)", len(rows))
+        now = int(time.time())
+        # Only re-check members whose last check is stale enough (spreads work
+        # across days and keeps quota usage low); newly-linked members have
+        # last_checked set, so they aren't re-probed until they're due.
+        due = [
+            row
+            for row in rows
+            if not row[3] or now - row[3] >= MEMBERSHIP_RECHECK_MIN_INTERVAL
+        ]
+        if not due:
+            logger.debug(
+                "Membership recheck: none of %d member(s) are due", len(rows)
+            )
+            return
+        logger.info(
+            "Re-checking membership for %d of %d linked member(s) (~%d quota units left today)",
+            len(due),
+            len(rows),
+            self.quota_remaining(),
+        )
         async with aiohttp.ClientSession() as session:
-            for discord_user_id, _yt, refresh_token_enc, _last, _title in rows:
+            for discord_user_id, _yt, refresh_token_enc, _last, _title in due:
+                if self.quota_remaining() <= 0:
+                    logger.warning(
+                        "Daily membership quota budget reached; stopping recheck "
+                        "(remaining members will be checked after the daily reset)"
+                    )
+                    break
                 try:
                     refresh_token = self._decrypt(refresh_token_enc)
                 except Exception:
