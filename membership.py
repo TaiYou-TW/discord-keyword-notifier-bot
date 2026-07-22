@@ -130,9 +130,7 @@ class MembershipMixin:
         # by backfilling the legacy MEMBERSHIP_GUILD_ID.
         cols = [
             row[1]
-            for row in conn.execute(
-                "PRAGMA table_info(membership_channels)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(membership_channels)").fetchall()
         ]
         if cols and "guild_id" not in cols:
             if MEMBERSHIP_GUILD_ID is None:
@@ -229,7 +227,7 @@ class MembershipMixin:
             except Exception:
                 logger.exception(
                     "Invalid MEMBERSHIP_TOKEN_ENC_KEY; membership verification "
-                    "disabled. Generate one with: python -c \"from "
+                    'disabled. Generate one with: python -c "from '
                     "cryptography.fernet import Fernet; "
                     'print(Fernet.generate_key().decode())"'
                 )
@@ -658,9 +656,11 @@ class MembershipMixin:
                 discord_user_id,
                 guild_id,
                 yt_channel_id,
-                "member"
-                if is_member
-                else ("not member" if is_member is False else "inconclusive"),
+                (
+                    "member"
+                    if is_member
+                    else ("not member" if is_member is False else "inconclusive")
+                ),
             )
             if is_member is not None:
                 await self.apply_member_role(
@@ -725,7 +725,9 @@ class MembershipMixin:
             async with aiohttp.ClientSession() as session:
                 await self.revoke_token(session, refresh_token)
         except Exception:
-            logger.exception("Error revoking token during unlink for %d", discord_user_id)
+            logger.exception(
+                "Error revoking token during unlink for %d", discord_user_id
+            )
         for guild_id, _ch, role_id in self.membership_channel_map:
             await self.apply_member_role(discord_user_id, guild_id, role_id, False)
         self._delete_membership(discord_user_id)
@@ -767,6 +769,7 @@ class MembershipMixin:
         app.router.add_get("/healthz", self._handle_healthz)
         # Home page (explains the app; used as the Google consent-screen home URL).
         app.router.add_get("/", self._handle_home)
+        app.router.add_get("/favicon.ico", self._handle_favicon)
         app.router.add_get("/index.html", self._handle_home)
         app.router.add_get("/home.html", self._handle_home)
         # Privacy policy / terms served on the same host (handy for the Google
@@ -796,10 +799,11 @@ class MembershipMixin:
     async def _handle_terms(self, request: web.Request) -> web.Response:
         return self._serve_static_file("terms.html")
 
+    async def _handle_favicon(self, request: web.Request) -> web.Response:
+        return self._serve_static_file("favicon.ico")
+
     def _serve_static_file(self, name: str) -> web.Response:
-        path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "static", name
-        )
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", name)
         try:
             with open(path, encoding="utf-8") as fh:
                 return web.Response(text=fh.read(), content_type="text/html")
@@ -880,11 +884,11 @@ class MembershipMixin:
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             "<title>YouTube 會員驗證</title></head>"
             '<body style="font-family:system-ui,sans-serif;background:#1e1f22;'
-            'color:#eee;display:flex;align-items:center;justify-content:center;'
+            "color:#eee;display:flex;align-items:center;justify-content:center;"
             'min-height:100vh;margin:0;padding:1rem">'
             f'<div style="max-width:460px;padding:2rem;border-radius:12px;'
             f'background:#2b2d31;border-top:4px solid {color};text-align:center">'
             "<h2>YouTube 會員驗證</h2>"
-            f"<p style=\"line-height:1.6\">{safe_message}</p></div></body></html>"
+            f'<p style="line-height:1.6">{safe_message}</p></div></body></html>'
         )
         return web.Response(text=html, content_type="text/html")
