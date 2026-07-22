@@ -82,6 +82,71 @@ async def _send_paginated_embeds(
         await interaction.followup.send(embed=em, ephemeral=True)
 
 
+def _iter_leaf_commands():
+    for command in bot.tree.walk_commands():
+        if getattr(command, "parent", None) is not None:
+            continue
+        if command.name == "help":
+            continue
+        yield command
+
+
+def _is_admin_command(command):
+    return (command.description or "").startswith("[管理員]")
+
+
+@bot.tree.command(name="help", description="查看所有可用指令")
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    is_admin = interaction.user.id in ADMIN_USER_IDS
+    commands = sorted(_iter_leaf_commands(), key=lambda command: command.name)
+    normal_commands = [
+        command for command in commands if not _is_admin_command(command)
+    ]
+    admin_commands = [command for command in commands if _is_admin_command(command)]
+
+    sections = []
+    if normal_commands:
+        sections.append(
+            "一般指令：\n"
+            + "\n".join(
+                f"/{command.name} - {command.description or '無描述'}"
+                for command in normal_commands
+            )
+        )
+    if is_admin and admin_commands:
+        sections.append(
+            "管理員指令：\n"
+            + "\n".join(
+                f"/{command.name} - {command.description or '無描述'}"
+                for command in admin_commands
+            )
+        )
+
+    if sections:
+        msg = "\n\n".join(sections)
+    else:
+        msg = "目前沒有可用指令。"
+
+    embed = discord.Embed(
+        title="📖 指令列表",
+        description=msg,
+        color=0x3498DB,
+        timestamp=interaction.created_at,
+    )
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.exception(
+            "Error sending help command list to user %s(%d): %s",
+            interaction.user,
+            interaction.user.id,
+            e,
+        )
+
+
 @bot.tree.command(name="notify_cooldown", description="設定相同關鍵字通知的冷卻時間")
 @app_commands.describe(seconds="冷卻時間（秒）")
 async def notify_cooldown(interaction: discord.Interaction, seconds: int):
@@ -726,287 +791,6 @@ async def emoji_received_rank(
     )
 
 
-@bot.tree.command(name="clear_emoji_stats", description="[管理員] 清除表情符號統計資料")
-async def clear_emoji_stats(interaction: discord.Interaction):
-    # Check if user is admin
-    if interaction.user.id not in ADMIN_USER_IDS:
-        try:
-            await interaction.response.send_message(
-                "❌ 此命令僅限管理員使用！", ephemeral=True
-            )
-        except Exception as e:
-            logger.exception(
-                "Error sending admin check message to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        conn = sqlite3.connect(bot.db_path)
-        conn.execute("DELETE FROM emoji_usage")
-        conn.commit()
-        conn.close()
-
-        try:
-            await interaction.followup.send(
-                "✅ 已清除所有表情符號統計資料！", ephemeral=True
-            )
-        except Exception as e:
-            logger.exception(
-                "Error sending clear confirmation to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
-
-        logger.info(
-            "Admin %s(%d) cleared all emoji statistics",
-            interaction.user,
-            interaction.user.id,
-        )
-
-    except Exception as e:
-        logger.exception(
-            "Error clearing emoji stats by user %s(%d): %s",
-            interaction.user,
-            interaction.user.id,
-            e,
-        )
-        try:
-            await interaction.followup.send(
-                f"⚠️ 清除資料時發生錯誤：{str(e)}", ephemeral=True
-            )
-        except Exception as e2:
-            logger.exception(
-                "Error sending clear error message to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e2,
-            )
-
-
-@bot.tree.command(
-    name="scan_emoji_history", description="[管理員] 掃描歷史訊息中的表情符號使用情況"
-)
-@app_commands.describe(
-    channel="要掃描的頻道（若不指定且 scan_guild=False，則為當前頻道）",
-    limit="每個頻道的掃描訊息數量上限（預設 1000，當 unlimited=True 時無效）",
-    scan_guild="是否掃描整個伺服器（預設 False）",
-    unlimited="是否不限制訊息數量（僅對 scan_guild=True 有效，預設 False）",
-)
-async def scan_emoji_history(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel = None,
-    limit: int = 1000,
-    scan_guild: bool = False,
-    unlimited: bool = False,
-):
-    # Check if user is admin
-    if interaction.user.id not in ADMIN_USER_IDS:
-        try:
-            await interaction.response.send_message(
-                "❌ 此命令僅限管理員使用！", ephemeral=True
-            )
-        except Exception as e:
-            logger.exception(
-                "Error sending admin check message to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    # Validate limit (only when not unlimited)
-    if not unlimited and (limit <= 0 or limit > 10000):
-        try:
-            await interaction.followup.send(
-                "❌ 訊息數量限制必須在 1-10000 之間！", ephemeral=True
-            )
-        except Exception as e:
-            logger.exception(
-                "Error sending limit validation error to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e,
-            )
-        return
-
-    try:
-        if scan_guild:
-            # Scan entire guild
-            if not interaction.guild:
-                try:
-                    await interaction.followup.send(
-                        "❌ 此命令只能在伺服器中使用！", ephemeral=True
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "Error sending guild-only error to user %s(%d): %s",
-                        interaction.user,
-                        interaction.user.id,
-                        e,
-                    )
-                return
-
-            # Send initial progress message
-            if unlimited:
-                progress_msg = await interaction.followup.send(
-                    f"🔍 開始掃描伺服器 `{interaction.guild.name}` 的所有文字頻道...\n"
-                    f"訊息數量：無限制（掃描所有歷史訊息）\n"
-                    f"⚠️ 此操作可能需要較長時間，請耐心等待...\n"
-                    f"請稍候...",
-                    ephemeral=True,
-                )
-            else:
-                progress_msg = await interaction.followup.send(
-                    f"🔍 開始掃描伺服器 `{interaction.guild.name}` 的所有文字頻道...\n"
-                    f"每個頻道訊息上限：{limit}\n"
-                    f"請稍候...",
-                    ephemeral=True,
-                )
-
-            # Perform the guild scan
-            messages_scanned, emojis_found, channels_scanned = (
-                await bot.scan_guild_history(interaction.guild, limit, unlimited)
-            )
-
-            # Update progress message with results
-            embed = discord.Embed(
-                title="✅ 伺服器歷史訊息掃描完成",
-                color=0x2ECC71,
-                timestamp=interaction.created_at,
-            )
-
-            embed.add_field(
-                name="📊 掃描結果",
-                value=f"伺服器：{interaction.guild.name}\n"
-                f"掃描頻道：{channels_scanned}\n"
-                f"掃描訊息：{messages_scanned}\n"
-                f"發現表情符號：{emojis_found}",
-                inline=False,
-            )
-
-            if messages_scanned > 0:
-                avg_emojis = emojis_found / messages_scanned
-                embed.add_field(
-                    name="📈 統計資訊",
-                    value=f"平均每訊息表情符號：{avg_emojis:.2f}",
-                    inline=True,
-                )
-
-            if channels_scanned > 0:
-                avg_channels = messages_scanned / channels_scanned
-                embed.add_field(
-                    name="📈 頻道統計",
-                    value=f"平均每頻道訊息：{avg_channels:.1f}",
-                    inline=True,
-                )
-
-            await progress_msg.edit(content=None, embed=embed)
-
-            logger.info(
-                "Admin %s(%d) scanned guild %s(%d): %d channels, %d messages, %d emojis found",
-                interaction.user,
-                interaction.user.id,
-                interaction.guild.name,
-                interaction.guild.id,
-                channels_scanned,
-                messages_scanned,
-                emojis_found,
-            )
-
-        else:
-            # Scan single channel (existing logic)
-            target_channel = channel or interaction.channel
-
-            if not isinstance(target_channel, discord.TextChannel):
-                try:
-                    await interaction.followup.send(
-                        "❌ 只能掃描文字頻道！", ephemeral=True
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "Error sending channel type error to user %s(%d): %s",
-                        interaction.user,
-                        interaction.user.id,
-                        e,
-                    )
-                return
-
-            # Send initial progress message
-            progress_msg = await interaction.followup.send(
-                f"🔍 開始掃描頻道 `{target_channel.name}` 的歷史訊息...\n"
-                f"目標訊息數量：{limit}\n"
-                f"請稍候...",
-                ephemeral=True,
-            )
-
-            # Perform the scan
-            messages_scanned, emojis_found = await bot.scan_channel_history(
-                target_channel, limit
-            )
-
-            # Update progress message with results
-            embed = discord.Embed(
-                title="✅ 頻道歷史訊息掃描完成",
-                color=0x2ECC71,
-                timestamp=interaction.created_at,
-            )
-
-            embed.add_field(
-                name="📊 掃描結果",
-                value=f"頻道：#{target_channel.name}\n"
-                f"掃描訊息：{messages_scanned}\n"
-                f"發現表情符號：{emojis_found}",
-                inline=False,
-            )
-
-            if messages_scanned > 0:
-                avg_emojis = emojis_found / messages_scanned
-                embed.add_field(
-                    name="📈 統計資訊",
-                    value=f"平均每訊息表情符號：{avg_emojis:.2f}",
-                    inline=True,
-                )
-
-            await progress_msg.edit(content=None, embed=embed)
-
-            logger.info(
-                "Admin %s(%d) scanned channel %s(%d): %d messages, %d emojis found",
-                interaction.user,
-                interaction.user.id,
-                target_channel.name,
-                target_channel.id,
-                messages_scanned,
-                emojis_found,
-            )
-
-    except Exception as e:
-        logger.exception(
-            "Error during emoji history scan by user %s(%d): %s",
-            interaction.user,
-            interaction.user.id,
-            e,
-        )
-        try:
-            await interaction.followup.send(
-                f"⚠️ 掃描過程中發生錯誤：{str(e)}", ephemeral=True
-            )
-        except Exception as e2:
-            logger.exception(
-                "Error sending scan error message to user %s(%d): %s",
-                interaction.user,
-                interaction.user.id,
-                e2,
-            )
-
-
 @bot.tree.command(
     name="verify_membership",
     description="連結 YouTube 帳號以驗證頻道會員資格並取得會員身分組",
@@ -1084,11 +868,13 @@ async def membership_status(interaction: discord.Interaction):
             member = None
 
     lines = []
-    for ch, role_id in mappings:
+    for _, role_id in mappings:
         has_role = bool(member) and any(r.id == role_id for r in member.roles)
         role = guild.get_role(role_id)
         role_name = role.name if role else f"@{role_id}"
-        lines.append(f"{'✅' if has_role else '❌'} `{ch}` → {role_name}")
+        if not has_role:
+            continue
+        lines.append(f"✅ {role_name}")
 
     await _send_paginated_lines(
         interaction,
@@ -1115,9 +901,7 @@ async def membership_unlink(interaction: discord.Interaction):
             "✅ 已解除連結並撤銷授權，會員身分組已移除。", ephemeral=True
         )
     else:
-        await interaction.followup.send(
-            "你尚未連結任何 YouTube 帳號。", ephemeral=True
-        )
+        await interaction.followup.send("你尚未連結任何 YouTube 帳號。", ephemeral=True)
     logger.info(
         "User %s(%d) unlinked membership", interaction.user, interaction.user.id
     )
@@ -1272,7 +1056,8 @@ async def membership_list(interaction: discord.Interaction):
     ]
     if not mappings:
         await interaction.response.send_message(
-            "本伺服器尚未設定任何頻道對應，使用 `/membership_add` 新增。", ephemeral=True
+            "本伺服器尚未設定任何頻道對應，使用 `/membership_add` 新增。",
+            ephemeral=True,
         )
         return
 
@@ -1336,7 +1121,9 @@ async def membership_account(interaction: discord.Interaction):
         description=description,
         color=0xE74C3C,
     )
-    embed.set_footer(text="使用 /verify_membership 重新連結，/membership_unlink 解除連結")
+    embed.set_footer(
+        text="使用 /verify_membership 重新連結，/membership_unlink 解除連結"
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
     logger.info(
         "User %s(%d) viewed their linked YouTube account",
@@ -1377,8 +1164,7 @@ async def membership_role_list(interaction: discord.Interaction):
 
     # Annotate each holder with their linked YouTube channel (name if known).
     linked = {
-        uid: (yt, title)
-        for uid, yt, _enc, _last, title in bot._all_membership_rows()
+        uid: (yt, title) for uid, yt, _enc, _last, title in bot._all_membership_rows()
     }
 
     fields: list[tuple[str, str]] = []
@@ -1556,7 +1342,9 @@ async def record_files(interaction: discord.Interaction):
         color=0xE74C3C,
         timestamp=interaction.created_at,
     )
-    embed.set_footer(text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}")
+    embed.set_footer(
+        text=f"{hint}刪除：/record_delete <檔名> · 目錄 {RECORDING_OUTPUT_DIR}"
+    )
     await interaction.followup.send(embed=embed, ephemeral=True)
     logger.info(
         "Admin %s(%d) listed %d saved recording(s)",
@@ -1610,9 +1398,11 @@ async def record_upload(interaction: discord.Interaction, filename: str):
         except Exception:
             logger.exception("Failed to post upload link to channel")
     await interaction.followup.send(
-        "✅ 已上傳並貼出連結。"
-        if link
-        else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。",
+        (
+            "✅ 已上傳並貼出連結。"
+            if link
+            else "✅ 已上傳（未取得公開連結，請至雲端設定分享）。"
+        ),
         ephemeral=True,
     )
     logger.info(

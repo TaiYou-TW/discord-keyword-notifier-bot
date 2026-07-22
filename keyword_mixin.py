@@ -211,7 +211,9 @@ class KeywordMixin:
         channel_name = message.channel.name if message.channel else "未知頻道"
         message_author = message.author.name if message.author else "未知使用者"
         message_author_avatar = (
-            message.author.avatar.url if message.author and message.author.avatar else None
+            message.author.avatar.url
+            if message.author and message.author.avatar
+            else None
         )
         server_icon = (
             message.guild.icon.url if message.guild and message.guild.icon else None

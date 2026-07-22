@@ -1,12 +1,13 @@
 import asyncio
 import datetime
 import sqlite3
-
+import re
 import aiohttp
 import discord
 
 from config import (
     DB_PATH,
+    HOLODEX_BASE_URL,
     HOLODEX_API_KEY,
     HOLODEX_CHANNEL_IDS,
     HOLODEX_NOTIFY_LIVE_CHANNEL_ID,
@@ -335,13 +336,20 @@ class HolodexMixin:
         is_org = bool(HOLODEX_ORG)
 
         for source in sources:
+            params = {"include": "live_info,description", "type": "placeholder,stream"}
             if is_org:
-                live_url = f"https://holodex.net/api/v2/live?org={source}&include=live_info"
+
+                params["org"] = source
             else:
-                live_url = f"https://holodex.net/api/v2/live?channel_id={source}&include=live_info"
+                params["channel_id"] = source
 
             try:
-                async with session.get(live_url, headers=headers, timeout=20) as resp:
+                async with session.get(
+                    f"{HOLODEX_BASE_URL}/live",
+                    params=params,
+                    headers=headers,
+                    timeout=20,
+                ) as resp:
                     if resp.status != 200:
                         logger.warning(
                             "Holodex API returned %d for source %s", resp.status, source
@@ -406,13 +414,24 @@ class HolodexMixin:
             )
 
             # 2) Check latest uploads (limit 5 to handle multiple new videos)
+            params = {
+                "sort": "published_at",
+                "limit": 5,
+                "type": "stream",
+                "include": "live_info,description",
+            }
             if is_org:
-                upload_url = f"https://holodex.net/api/v2/videos?org={source}&sort=published_at&limit=5&type=stream&include=live_info"
+                params["org"] = source
             else:
-                upload_url = f"https://holodex.net/api/v2/videos?channel_id={source}&sort=published_at&limit=5&type=stream&include=live_info"
+                params["channel_id"] = source
 
             try:
-                async with session.get(upload_url, headers=headers, timeout=20) as resp:
+                async with session.get(
+                    f"{HOLODEX_BASE_URL}/videos",
+                    params=params,
+                    headers=headers,
+                    timeout=20,
+                ) as resp:
                     if resp.status != 200:
                         logger.warning(
                             "Holodex upload API returned %d for source %s",
@@ -488,7 +507,7 @@ class HolodexMixin:
         stream_title = stream.get("title") or "No title"
         channel_name = stream.get("channel", {}).get("name") or "Unknown Channel"
         stream_id = stream.get("id")
-        stream_url = stream.get("url")
+        stream_url = stream.get("link")
         if not stream_url and stream_id:
             stream_url = f"https://www.youtube.com/watch?v={stream_id}"
 
@@ -518,6 +537,21 @@ class HolodexMixin:
         else:
             title = f"🎬 新影片：{stream_title or ''}"
             color = 0x3498DB
+
+        desc_text = stream.get("description") or ""
+
+        # remove Holodex's credit line in description for placeholders
+        # e.g. >>: 22050 mod, is admin. or >>: 22050 mod w/ APIKEY.
+        CREDIT_LINE_PATTERN = r"^>>: \d+[\w\s,\/]+\.$"
+        desc_text = re.sub(
+            CREDIT_LINE_PATTERN, "", desc_text.strip(), flags=re.MULTILINE
+        ).strip()
+
+        embed_description = ""
+        if desc_text:
+            embed_description = desc_text[:NOTIFICATION_MAX_DESCRIPTION_LENGTH] + (
+                "..." if len(desc_text) > NOTIFICATION_MAX_DESCRIPTION_LENGTH else ""
+            )
 
         embed = discord.Embed(
             title=title,

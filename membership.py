@@ -135,7 +135,11 @@ class MembershipMixin:
             ).fetchall()
         ]
         if cols and "guild_id" not in cols:
-            backfill = MEMBERSHIP_GUILD_ID or 0
+            if MEMBERSHIP_GUILD_ID is None:
+                raise RuntimeError(
+                    "Legacy membership_channels schema detected but MEMBERSHIP_GUILD_ID is not set; set MEMBERSHIP_GUILD_ID once to migrate existing mappings."
+                )
+            backfill = MEMBERSHIP_GUILD_ID
             logger.info(
                 "Migrating membership_channels to per-guild schema "
                 "(backfilling guild_id=%s)...",
@@ -493,9 +497,25 @@ class MembershipMixin:
         if member is None:
             try:
                 member = await guild.fetch_member(discord_user_id)
-            except Exception:
+            except discord.NotFound:
                 logger.debug(
                     "Membership: user %d is not in guild %s; cannot assign role %s",
+                    discord_user_id,
+                    guild_id,
+                    role_id,
+                )
+                return
+            except discord.Forbidden:
+                logger.warning(
+                    "Missing permission to fetch member %d in guild %s; cannot sync role %s",
+                    discord_user_id,
+                    guild_id,
+                    role_id,
+                )
+                return
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to fetch member %d in guild %s; cannot sync role %s",
                     discord_user_id,
                     guild_id,
                     role_id,

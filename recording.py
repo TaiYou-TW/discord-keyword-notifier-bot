@@ -162,7 +162,9 @@ class RecordingMixin:
             url,
         ]
 
-        log_path = os.path.join(RECORDING_OUTPUT_DIR, f"record-{key}-{started}.log")
+        safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", key)[:80] or "recording"
+        log_path = os.path.join(RECORDING_OUTPUT_DIR, f"record-{safe_key}-{started}.log")
+        log_fh = None
         try:
             log_fh = open(log_path, "wb")
             process = await asyncio.create_subprocess_exec(
@@ -172,6 +174,11 @@ class RecordingMixin:
                 stdin=asyncio.subprocess.DEVNULL,
             )
         except Exception:
+            if log_fh is not None:
+                try:
+                    log_fh.close()
+                except Exception:
+                    pass
             logger.exception("Failed to launch yt-dlp for %s", url)
             return False, "啟動 yt-dlp 失敗，請查看伺服器日誌。", None
 
@@ -259,9 +266,11 @@ class RecordingMixin:
 
     # ---- saved-file helpers --------------------------------------------------
 
-    def _find_output_file(self, key: str, started_at) -> str | None:
+    def _find_output_file(self, _key: str, started_at) -> str | None:
         """Locate the media file a recording wrote (largest non-log match)."""
-        marker = f"-{key}-{started_at}."
+        if not started_at:
+            return None
+        marker = f"-{started_at}."
         try:
             names = os.listdir(RECORDING_OUTPUT_DIR)
         except OSError:
@@ -418,7 +427,7 @@ class RecordingMixin:
 
     # ---- retention / auto-cleanup --------------------------------------------
 
-    def cleanup_old_recordings(self) -> int:
+    def cleanup_old_recordings(self, active_keys: set[str] | None = None) -> int:
         """Delete recordings (and logs) older than RECORDING_RETENTION_DAYS.
 
         Returns the number of files removed. No-op when retention <= 0. Files
@@ -431,7 +440,8 @@ class RecordingMixin:
             names = os.listdir(RECORDING_OUTPUT_DIR)
         except OSError:
             return 0
-        active_keys = set(self.active_recordings.keys())
+        if active_keys is None:
+            active_keys = set(self.active_recordings.keys())
         removed = 0
         for name in names:
             path = os.path.join(RECORDING_OUTPUT_DIR, name)
@@ -458,7 +468,8 @@ class RecordingMixin:
         await asyncio.sleep(30)  # let startup settle
         while True:
             try:
-                await asyncio.to_thread(self.cleanup_old_recordings)
+                active_keys = set(self.active_recordings.keys())
+                await asyncio.to_thread(self.cleanup_old_recordings, active_keys)
             except Exception:
                 logger.exception("Recording cleanup monitor error")
             await asyncio.sleep(RECORDING_CLEANUP_INTERVAL)
