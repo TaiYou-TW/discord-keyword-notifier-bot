@@ -135,12 +135,51 @@
                 communities.
             </p>
             <div class="nav">
-                <a href="#en">English</a><a href="#zh">繁體中文</a>
+                <a href="#zh">繁體中文</a><a href="#en">English</a>
                 <a href="/privacy.html">Privacy Policy</a><a href="/terms.html">Terms</a>
                 <a href="https://github.com/TaiYou-TW/discord-keyword-notifier-bot" target="_blank"
                     rel="noopener">GitHub</a>
             </div>
         </header>
+
+        <!-- ============================ 中文 ============================ -->
+        <h2 id="zh">BAUBAU Alert 的用途</h2>
+        <p>
+            <strong>BAUBAU Alert</strong> 是一個為 VTuber 粉絲社群打造的 Discord
+            機器人，提供各種通知，並可透過驗證 YouTube 頻道會員資格來授予 Discord
+            會限身分組。它運作於已將其加入的 Discord 伺服器中，沒有獨立的網站登入或消費者帳號。
+        </p>
+
+        <div class="card">
+            <h3>📣 通知功能</h3>
+            <ul>
+                <li>關鍵字通知 — 當你訂閱的關鍵字出現在頻道時以私訊提醒你。</li>
+                <li>追蹤 YouTube 頻道的開台與新影片通知（透過 Holodex）。</li>
+                <li>追蹤的 YouTube 社群貼文的新貼文通知。</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>✅ YouTube 會員驗證（使用 Google 登入）</h3>
+            <p>
+                伺服器管理員可將某個 YouTube 頻道對應到一個 Discord 身分組。成員點選
+                <code>/verify_membership</code> 並以 Google 登入，授予 BAUBAU Alert YouTube
+                存取權（<code>youtube.force-ssl</code>）。
+            </p>
+            <p>
+                BAUBAU Alert
+                <strong>僅</strong>用此權限確認你能否觀看該頻道的會限內容（即你是否為付費會員），若是則授予對應的
+                Discord 身分組，並定期重新檢查，會員資格結束時移除身分組。
+            </p>
+            <p>
+                因 YouTube API
+                設計問題，本服務僅能透過該權限來讀取會限內容，進行確認是否為付費會員，本服務<strong>不會</strong>存取你的影片、觀看紀錄、訂閱，也不會代你發布或修改任何內容。你可隨時以
+                <code>/membership_unlink</code> 或於
+                <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google
+                    帳戶權限</a>解除連結。詳見<a href="/privacy.html">隱私權政策</a>（含 Google API
+                服務有限使用聲明）。
+            </p>
+        </div>
 
         <!-- ============================ ENGLISH ============================ -->
         <h2 id="en" lang="en">What BAUBAU Alert does</h2>
@@ -163,7 +202,7 @@
                     Holodex).
                 </li>
                 <li>
-                    New posts from followed X (Twitter) profiles and YouTube community tabs.
+                    New posts from followed YouTube community tabs.
                 </li>
             </ul>
         </div>
@@ -190,45 +229,6 @@
                 <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google account
                     permissions</a>. See our <a href="/privacy.html">Privacy Policy</a> for details, including our
                 Google API Services Limited Use disclosure.
-            </p>
-        </div>
-
-        <!-- ============================ 中文 ============================ -->
-        <h2 id="zh">BAUBAU Alert 的用途</h2>
-        <p>
-            <strong>BAUBAU Alert</strong> 是一個為 VTuber 粉絲社群打造的 Discord
-            機器人，提供各種通知，並可透過驗證 YouTube 頻道會員資格來授予 Discord
-            會限身分組。它運作於已將其加入的 Discord 伺服器中，沒有獨立的網站登入或消費者帳號。
-        </p>
-
-        <div class="card">
-            <h3>📣 通知功能</h3>
-            <ul>
-                <li>關鍵字通知 — 當你訂閱的關鍵字出現在頻道時以私訊提醒你。</li>
-                <li>追蹤 YouTube 頻道的開台與新影片通知（透過 Holodex）。</li>
-                <li>追蹤的 X（Twitter）帳號（開發中）與 YouTube 社群貼文的新貼文通知。</li>
-            </ul>
-        </div>
-
-        <div class="card">
-            <h3>✅ YouTube 會員驗證（使用 Google 登入）</h3>
-            <p>
-                伺服器管理員可將某個 YouTube 頻道對應到一個 Discord 身分組。成員點選
-                <code>/verify_membership</code> 並以 Google 登入，授予 BAUBAU Alert YouTube
-                存取權（<code>youtube.force-ssl</code>）。
-            </p>
-            <p>
-                BAUBAU Alert
-                <strong>僅</strong>用此權限確認你能否觀看該頻道的會限內容（即你是否為付費會員），若是則授予對應的
-                Discord 身分組，並定期重新檢查，會員資格結束時移除身分組。
-            </p>
-            <p>
-                因 YouTube API
-                設計問題，本服務僅能透過該權限來讀取會限內容，進行確認是否為付費會員，本服務<strong>不會</strong>存取你的影片、觀看紀錄、訂閱，也不會代你發布或修改任何內容。你可隨時以
-                <code>/membership_unlink</code> 或於
-                <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google
-                    帳戶權限</a>解除連結。詳見<a href="/privacy.html">隱私權政策</a>（含 Google API
-                服務有限使用聲明）。
             </p>
         </div>
 
