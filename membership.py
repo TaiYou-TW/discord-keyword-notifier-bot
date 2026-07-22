@@ -802,13 +802,32 @@ class MembershipMixin:
     async def _handle_favicon(self, request: web.Request) -> web.Response:
         return self._serve_static_file("favicon.ico")
 
+    # Content types by extension; anything else is served as binary.
+    _STATIC_CONTENT_TYPES = {
+        ".html": "text/html",
+        ".ico": "image/x-icon",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".css": "text/css",
+        ".js": "text/javascript",
+        ".txt": "text/plain",
+        ".json": "application/json",
+    }
+
     def _serve_static_file(self, name: str) -> web.Response:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", name)
+        ext = os.path.splitext(name)[1].lower()
+        content_type = self._STATIC_CONTENT_TYPES.get(ext, "application/octet-stream")
         try:
-            with open(path, encoding="utf-8") as fh:
-                return web.Response(text=fh.read(), content_type="text/html")
+            # Read as bytes so binary assets (e.g. favicon.ico) aren't decoded
+            # as UTF-8; text assets carry their own charset (HTML has a meta tag).
+            with open(path, "rb") as fh:
+                data = fh.read()
         except OSError:
             return web.Response(status=404, text="Not found")
+        if content_type.startswith("text/"):
+            return web.Response(body=data, content_type=content_type, charset="utf-8")
+        return web.Response(body=data, content_type=content_type)
 
     async def _handle_oauth_callback(self, request: web.Request):
         error = request.query.get("error")
