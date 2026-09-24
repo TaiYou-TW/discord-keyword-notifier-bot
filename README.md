@@ -43,7 +43,8 @@ docker compose up --build
 - `/record_files`：列出已錄製完成的檔案（管理員專用）
 - `/record_upload <filename>`：把錄影檔上傳到雲端並貼出連結（rclone，管理員專用）
 - `/record_delete <filename> [from_cloud]`：刪除錄影檔，可選擇一併從雲端刪除（管理員專用）
-- `/summarize <url> [transcript]`：以日文摘要 YouTube 影片，可附上完整逐字稿
+- `/summarize <url> [lang] [transcript]`：摘要 YouTube 影片，可附上完整逐字稿
+- `/summarize_audio [file] [url] [lang] [transcript]`：摘要上傳的音檔，或 Google Drive／Dropbox 連結
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
@@ -253,8 +254,20 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
 
 ## 📝 YouTube 影片摘要
 
-任何人都能用 `/summarize <url>` 取得 YouTube 影片的日文摘要（條列要點 + 一句總結）。
+任何人都能用 `/summarize <url>` 取得 YouTube 影片的摘要（條列要點 + 一句總結）。
 加上 `transcript=True` 會另外附上完整逐字稿（`.txt`）。
+
+`/summarize_audio` 走同一套流程，來源改為：
+
+- `file`：直接上傳音檔或影片檔（mp3、m4a、wav、ogg、mp4…），受 Discord 上傳大小限制（免費帳號約 10 MB）。
+- `url`：Google Drive、Dropbox 或 Discord 附件連結，適合較大的檔案。Drive／Dropbox 檔案需設為
+  「知道連結的任何人都能檢視」。為了不讓使用者叫轉錄主機去抓任意網址（例如家中內網），只接受這幾個網站。
+
+### 語言
+
+`lang` 選項指定影片／音檔的語言：日文（預設）、英文、中文、韓文或自動偵測，會原樣傳給轉錄服務：
+日文用 anime-whisper，其他語言與自動偵測用多語的 whisper-large-v3-turbo。YouTube 影片若有該語言的
+人工字幕（`en` 也包含 `en-US` 等地區變體）則直接使用；自動偵測不抓字幕。雲端備援（Groq）同樣支援所有語言。摘要以實況主本人的第一人稱視角撰寫，像是實況主自己回顧這次直播；標題（要點／總結）為中文，內容則維持影片的原始語言，不翻譯。
 
 ### 運作原理
 

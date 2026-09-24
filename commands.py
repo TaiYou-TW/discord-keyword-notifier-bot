@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import sqlite3
 import discord
 from discord import app_commands
@@ -11,9 +12,8 @@ from config import (
     ADMIN_USER_IDS,
     RCLONE_REMOTE,
     RECORDING_OUTPUT_DIR,
-    SUMMARY_MODEL,
 )
-from summarize import SummarizeError, parse_video_id
+from summarize import SummarizeError, parse_media_url, parse_video_id
 
 # Discord hard limits we page under: 2000 chars per message content, and for
 # embeds 25 fields / ~6000 chars each. These helpers split long output across
@@ -1683,19 +1683,126 @@ async def record_list(interaction: discord.Interaction):
     )
 
 
-_SUMMARY_SOURCE_LABELS = {
-    "subs": "YouTube 字幕",
-    "whisper": "Whisper（地端）",
-    "groq": "Groq Whisper（雲端備援）",
+# Spoken-language choices for /summarize and /summarize_audio, passed to the
+# transcribe service (ja -> anime-whisper, others -> large-v3-turbo). "auto"
+# lets whisper detect it and skips subtitles.
+_SUMMARY_LANG_CHOICES = [
+    app_commands.Choice(name="日文（預設）", value="ja"),
+    app_commands.Choice(name="英文", value="en"),
+    app_commands.Choice(name="中文", value="zh"),
+    app_commands.Choice(name="韓文", value="ko"),
+    app_commands.Choice(name="自動偵測", value="auto"),
+]
+
+
+def _lang_value(lang: app_commands.Choice[str] | None) -> str | None:
+    """Choice -> ISO code for the pipeline; "auto" -> None (auto-detect)."""
+    value = lang.value if lang else "ja"
+    return None if value == "auto" else value
+
+
+# Attachment types /summarize_audio accepts (Discord's content_type can be
+# missing, so the extension is checked too).
+_AUDIO_EXTENSIONS = {
+    ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".oga",
+    ".webm", ".mp4", ".mov", ".mkv", ".wma", ".amr",
 }
 
 
-@bot.tree.command(name="summarize", description="用日文摘要 YouTube 影片")
+async def _reply_with_summary(
+    interaction: discord.Interaction,
+    key: str,
+    run,
+    link: str | None,
+    transcript: bool,
+) -> None:
+    """Await ``run(progress)`` and edit the deferred reply with the summary.
+
+    ``key`` names the cache entry (used for attachment filenames); ``link``
+    becomes the embed URL when set. The interaction must be deferred.
+    """
+
+    async def progress(text: str) -> None:
+        await interaction.edit_original_response(content=text)
+
+    try:
+        row = await run(progress)
+    except SummarizeError as exc:
+        await interaction.edit_original_response(content=f"❌ {exc}")
+        return
+    except Exception:
+        logger.exception("Summarize failed for %s", key)
+        await interaction.edit_original_response(content="❌ 摘要時發生未預期的錯誤，請稍後再試。")
+        return
+
+    safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", key)
+    title = row.get("title") or key
+    summary = row["summary"]
+
+    files = []
+    if len(summary) <= 4096:
+        content = None
+        embed = discord.Embed(
+            title=title[:256], url=link, description=summary, color=0xFF0000
+        )
+    else:
+        # Over the embed limit: send the summary as a Markdown attachment.
+        content = f"📝 **{title[:200]}**" + (f"\n{link}" if link else "")
+        embed = None
+        header = f"# {title}\n\n" + (f"{link}\n\n" if link else "")
+        files.append(
+            discord.File(
+                io.BytesIO(f"{header}{summary}\n".encode()),
+                filename=f"{safe_key}-summary.md",
+            )
+        )
+    if transcript:
+        files.append(
+            discord.File(
+                io.BytesIO(row["transcript"].encode()),
+                filename=f"{safe_key}-transcript.txt",
+            )
+        )
+
+    try:
+        await interaction.edit_original_response(
+            content=content, embed=embed, attachments=files
+        )
+    except discord.HTTPException:
+        # Past Discord's 15-minute interaction window the token is dead; post
+        # to the channel instead so the (already cached) result isn't lost.
+        logger.warning("Summarize reply for %s failed; posting to channel", key)
+        if interaction.channel is not None:
+            for f in files:
+                f.reset()
+            await interaction.channel.send(
+                content=f"{interaction.user.mention} " + (content or ""),
+                embed=embed,
+                files=files,
+            )
+    logger.info(
+        "User %s(%d) summarized %s (source=%s cached=%s)",
+        interaction.user,
+        interaction.user.id,
+        key,
+        row["source"],
+        row.get("cached"),
+    )
+
+
+@bot.tree.command(name="summarize", description="摘要 YouTube 影片")
 @app_commands.describe(
     url="YouTube 影片網址或影片 ID",
+    lang="影片的語言（預設日文）",
     transcript="是否附上完整逐字稿（預設 False）",
 )
-async def summarize(interaction: discord.Interaction, url: str, transcript: bool = False):
+@app_commands.choices(lang=_SUMMARY_LANG_CHOICES)
+async def summarize(
+    interaction: discord.Interaction,
+    url: str,
+    lang: app_commands.Choice[str] | None = None,
+    transcript: bool = False,
+):
     reason = bot.summarize_available()
     if reason:
         await interaction.response.send_message("❌ " + reason, ephemeral=True)
@@ -1709,75 +1816,75 @@ async def summarize(interaction: discord.Interaction, url: str, transcript: bool
         return
 
     await interaction.response.defer()
-
-    async def progress(text: str) -> None:
-        await interaction.edit_original_response(content=text)
-
-    try:
-        row = await bot.summarize_video(video_id, progress)
-    except SummarizeError as exc:
-        await interaction.edit_original_response(content=f"❌ {exc}")
-        return
-    except Exception:
-        logger.exception("Summarize failed for %s", video_id)
-        await interaction.edit_original_response(content="❌ 摘要時發生未預期的錯誤，請稍後再試。")
-        return
-
-    video_url = f"https://youtu.be/{video_id}"
-    title = row.get("title") or video_id
-    summary = row["summary"]
-    footer = (
-        f"逐字稿：{_SUMMARY_SOURCE_LABELS.get(row['source'], row['source'])}"
-        f" · 摘要：{row.get('summary_model') or SUMMARY_MODEL}"
-        + (" · 快取" if row.get("cached") else "")
+    await _reply_with_summary(
+        interaction,
+        video_id,
+        lambda progress: bot.summarize_video(video_id, progress, _lang_value(lang)),
+        f"https://youtu.be/{video_id}",
+        transcript,
     )
 
-    files = []
-    if len(summary) <= 4096:
-        content = None
-        embed = discord.Embed(
-            title=title[:256], url=video_url, description=summary, color=0xFF0000
-        )
-        embed.set_footer(text=footer)
-    else:
-        # Over the embed limit: send the summary as a Markdown attachment.
-        content = f"📝 **{title[:200]}**\n{video_url}\n-# {footer}"
-        embed = None
-        files.append(
-            discord.File(
-                io.BytesIO(f"# {title}\n\n{video_url}\n\n{summary}\n".encode()),
-                filename=f"{video_id}-summary.md",
-            )
-        )
-    if transcript:
-        files.append(
-            discord.File(
-                io.BytesIO(row["transcript"].encode()),
-                filename=f"{video_id}-transcript.txt",
-            )
-        )
 
-    try:
-        await interaction.edit_original_response(
-            content=content, embed=embed, attachments=files
+@bot.tree.command(
+    name="summarize_audio",
+    description="摘要上傳的音檔，或 Google Drive／Dropbox 連結",
+)
+@app_commands.describe(
+    file="音檔或影片檔（受 Discord 上傳大小限制）",
+    url="Google Drive／Dropbox 分享連結（需設為「知道連結的任何人」可檢視）",
+    lang="音檔的語言（預設日文）",
+    transcript="是否附上完整逐字稿（預設 False）",
+)
+@app_commands.choices(lang=_SUMMARY_LANG_CHOICES)
+async def summarize_audio(
+    interaction: discord.Interaction,
+    file: discord.Attachment | None = None,
+    url: str | None = None,
+    lang: app_commands.Choice[str] | None = None,
+    transcript: bool = False,
+):
+    reason = bot.summarize_available()
+    if reason:
+        await interaction.response.send_message("❌ " + reason, ephemeral=True)
+        return
+    if (file is None) == (not url):
+        await interaction.response.send_message(
+            "❌ 請擇一提供：上傳檔案（file）或分享連結（url）。", ephemeral=True
         )
-    except discord.HTTPException:
-        # Past Discord's 15-minute interaction window the token is dead; post
-        # to the channel instead so the (already cached) result isn't lost.
-        logger.warning("Summarize reply for %s failed; posting to channel", video_id)
-        if interaction.channel is not None:
-            for f in files:
-                f.reset()
-            await interaction.channel.send(
-                content=f"{interaction.user.mention} " + (content or ""),
-                embed=embed,
-                files=files,
+        return
+
+    if file is not None:
+        ext = os.path.splitext(file.filename)[1].lower()
+        ctype = (file.content_type or "").split(";")[0]
+        if not (ctype.startswith(("audio/", "video/")) or ext in _AUDIO_EXTENSIONS):
+            await interaction.response.send_message(
+                "❌ 只支援音檔或影片檔（mp3、m4a、wav、ogg、mp4…）。", ephemeral=True
             )
-    logger.info(
-        "User %s(%d) summarized %s (source=%s cached=%s)",
-        interaction.user,
-        interaction.user.id,
-        video_id,
-        row["source"],
-        row.get("cached"),
+            return
+        key = f"att:{file.id}"
+        fetch_url = file.url
+        title = file.filename
+        link = None
+    else:
+        parsed = parse_media_url(url)
+        if parsed is None:
+            if parse_video_id(url):
+                hint = "YouTube 影片請改用 `/summarize`。"
+            else:
+                hint = "目前只支援 Google Drive、Dropbox 與 Discord 附件連結。"
+            await interaction.response.send_message(f"❌ {hint}", ephemeral=True)
+            return
+        key, fetch_url = parsed
+        title = None
+        link = url.strip()
+
+    await interaction.response.defer()
+    await _reply_with_summary(
+        interaction,
+        key,
+        lambda progress: bot.summarize_media(
+            key, fetch_url, title, progress, _lang_value(lang)
+        ),
+        link,
+        transcript,
     )
