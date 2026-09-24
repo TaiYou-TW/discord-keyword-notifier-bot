@@ -172,7 +172,10 @@ RCLONE_PATH = os.getenv("RCLONE_PATH", "rclone")
 # when it is offline, busy or times out the bot downloads the audio itself
 # (yt-dlp + ffmpeg, reusing RECORDING_COOKIE_FILE) and transcribes it with Groq.
 # Both LLM endpoints go through the OpenAI-compatible SDK (only base_url differs).
-TRANSCRIBE_URL = os.getenv("TRANSCRIBE_URL", "").rstrip("/")
+TRANSCRIBE_URL = os.getenv("TRANSCRIBE_URL", "").strip().rstrip("/")
+if TRANSCRIBE_URL and "://" not in TRANSCRIBE_URL:
+    # aiohttp rejects scheme-less URLs ("100.x.y.z:8000" -> InvalidURL).
+    TRANSCRIBE_URL = f"http://{TRANSCRIBE_URL}"
 TRANSCRIBE_TOKEN = os.getenv("TRANSCRIBE_TOKEN", "")
 # Connect timeout (seconds); an unreachable transcribe service falls back quickly.
 TRANSCRIBE_CONNECT_TIMEOUT = float(os.getenv("TRANSCRIBE_CONNECT_TIMEOUT", "5"))

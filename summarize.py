@@ -306,7 +306,12 @@ class SummarizeMixin:
                         if errors >= _TRANSCRIBE_MAX_POLL_ERRORS:
                             return None
         except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, ValueError) as exc:
-            logger.warning("Transcribe service unavailable (%s); falling back to Groq", exc)
+            logger.warning(
+                "Transcribe service %s unavailable (%s: %s); falling back to Groq",
+                TRANSCRIBE_URL,
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     # ---- VPS fallback: yt-dlp + ffmpeg + Groq ----------------------------------
