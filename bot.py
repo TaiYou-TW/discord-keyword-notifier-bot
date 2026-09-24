@@ -12,6 +12,7 @@ from holodex import HolodexMixin
 from keyword_mixin import KeywordMixin
 from membership import MembershipMixin
 from recording import RecordingMixin
+from summarize import SummarizeMixin
 from twitter_syndication import TwitterSyndicationMixin
 from youtube_community import YouTubeCommunityMixin
 from enums import HolodexNotifyType
@@ -54,6 +55,7 @@ class MyBot(
     KeywordMixin,
     MembershipMixin,
     RecordingMixin,
+    SummarizeMixin,
     discord.Client,
 ):
     def __init__(self):
@@ -100,6 +102,11 @@ class MyBot(
         self.active_recordings = {}  # { key: {process, log_fh, started_at, ...} }
         self._recording_available_cache = None  # yt-dlp availability (cached)
         self.recording_cleanup_task = None  # retention sweep task
+
+        # YouTube video summaries (see SummarizeMixin)
+        self._summarize_inflight = {}  # { video_id: asyncio.Task }
+        self._summarize_fallback_sem = asyncio.Semaphore(1)  # VPS yt-dlp/ffmpeg
+        self._summarize_clients = {}  # { provider: AsyncOpenAI }
 
         # In-memory dedupe for keyword notification (message_id:keyword)
         self.notified_message_keywords = (
@@ -165,6 +172,7 @@ class MyBot(
             "CREATE TABLE IF NOT EXISTS muted_channels (user_id INTEGER, channel_id INTEGER, PRIMARY KEY (user_id, channel_id))"
         )
         self.ensure_membership_schema(conn)
+        self.ensure_summary_schema(conn)
         conn.commit()
         conn.close()
 

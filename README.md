@@ -43,6 +43,7 @@ docker compose up --build
 - `/record_files`：列出已錄製完成的檔案（管理員專用）
 - `/record_upload <filename>`：把錄影檔上傳到雲端並貼出連結（rclone，管理員專用）
 - `/record_delete <filename> [from_cloud]`：刪除錄影檔，可選擇一併從雲端刪除（管理員專用）
+- `/summarize <url> [transcript]`：以日文摘要 YouTube 影片，可附上完整逐字稿
 - Twitter Profile 新推文推播到指定 Discord 頻道（可選）
 - YouTube 社群貼文（Community Post）推播到指定 Discord 頻道（可選）
 
@@ -249,3 +250,52 @@ Bot 會即時記錄每則訊息與每個表情回應（reaction）中的表情�
   自動重載、或容器重啟）會中斷所有錄影，已寫入的檔案仍會保留。
 - **同時上限**：由 `RECORDING_MAX_CONCURRENT` 控制（預設 3）。
 - **磁碟空間**：直播錄影檔案可能很大，請留意 `RECORDING_HOST_DIR` 所在磁碟的容量。
+
+## 📝 YouTube 影片摘要
+
+任何人都能用 `/summarize <url>` 取得 YouTube 影片的日文摘要（條列要點 + 一句總結）。
+加上 `transcript=True` 會另外附上完整逐字稿（`.txt`）。
+
+### 運作原理
+
+1. **快取**：以影片 ID 為 key 存在 SQLite（`summary_cache` 資料表），同一支影片第二次起直接回覆。
+   逐字稿一取得就先存起來，摘要失敗重試時不必重新轉錄。同一支影片同時被多人請求時只會跑一次。
+2. **地端轉錄**：透過 Tailscale 呼叫家中的轉錄服務（[youtube-transcript](../youtube-transcript) 的 `server.py`）：
+   `POST /jobs` 提交後輪詢 `GET /jobs/{id}`，排隊位置與進度會即時顯示在回覆訊息上。
+   影片有人工字幕時服務直接回字幕，否則用 anime-whisper 轉錄。
+3. **雲端備援**：轉錄服務未設定、連不上、排隊已滿（429）、job 失敗或超過 `TRANSCRIBE_JOB_TIMEOUT`，
+   Bot 會在 VPS 上自己用 `yt-dlp` 抓人工字幕，沒有字幕才下載音檔，用 `ffmpeg` 轉成 16kHz 單聲道 opus 並切段，
+   再交給 Groq（`whisper-large-v3-turbo`）轉錄。有 `RECORDING_COOKIE_FILE` 時會帶上 cookies，以防機房 IP 被 YouTube 擋。
+4. **摘要**：逐字稿交給 `SUMMARY_MODEL`（預設 `gpt-5-nano`）產生摘要。
+5. **回覆**：摘要 ≤ 4096 字用 embed 回覆，更長則改傳 `.md` 附檔。超過 Discord 15 分鐘的互動期限時，改發到該頻道。
+
+OpenAI 與 Groq 都透過 OpenAI 相容 SDK 呼叫，只差 `base_url` 與金鑰。
+
+### 環境變數
+
+| 變數 | 說明 | 預設 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | 摘要用的 OpenAI 金鑰（必填） | 空 |
+| `OPENAI_BASE_URL` | 摘要 API 端點 | `https://api.openai.com/v1` |
+| `SUMMARY_MODEL` | 摘要模型 | `gpt-5-nano` |
+| `SUMMARY_REASONING_EFFORT` | 推理模型的 `reasoning_effort`（`minimal`/`low`/`medium`/`high`）；空白則不送此參數（非推理模型或不支援的 provider） | `low` |
+| `SUMMARY_MAX_TRANSCRIPT_CHARS` | 逐字稿超過此字數先截斷再摘要 | `200000` |
+| `TRANSCRIBE_URL` | 轉錄服務位址，如 `http://100.x.y.z:8000`；空白則一律走 Groq | 空 |
+| `TRANSCRIBE_TOKEN` | 轉錄服務的 bearer token（與服務端 `TRANSCRIBE_TOKEN` 相同） | 空 |
+| `TRANSCRIBE_CONNECT_TIMEOUT` | 連線逾時（秒） | `5` |
+| `TRANSCRIBE_POLL_INTERVAL` | 輪詢 job 間隔（秒） | `5` |
+| `TRANSCRIBE_JOB_TIMEOUT` | 等轉錄服務的上限（秒），超過改走 Groq | `540` |
+| `GROQ_API_KEY` | 雲端備援轉錄金鑰；空白則停用備援 | 空 |
+| `GROQ_BASE_URL` | Groq API 端點 | `https://api.groq.com/openai/v1` |
+| `GROQ_TRANSCRIBE_MODEL` | 雲端轉錄模型 | `whisper-large-v3-turbo` |
+| `GROQ_CHUNK_SECONDS` | 備援音檔切段長度（秒），確保每段小於 Groq 上傳限制 | `1800` |
+
+`OPENAI_API_KEY` 必填，`TRANSCRIBE_URL` 與 `GROQ_API_KEY` 至少要設一個，否則指令會回覆「未啟用」。
+
+### 注意事項
+
+- **Tailscale**：VPS 與轉錄主機需在同一個 tailnet。容器內不一定解析得到 MagicDNS 名稱，
+  解析不到時 `TRANSCRIBE_URL` 請直接填轉錄主機的 Tailscale IP（`100.x.y.z`）。
+- **相依套件**：新增了 `openai`（`requirements.txt`），更新後需 `docker compose up -d --build`。
+  備援路徑使用的 `yt-dlp`、`ffmpeg`、`deno` 已在 Docker image 內。
+- **並行**：VPS 上的備援下載／轉檔一次只跑一支，避免小主機被塞爆。

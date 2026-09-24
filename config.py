@@ -167,4 +167,39 @@ RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "")
 RCLONE_CONFIG = os.getenv("RCLONE_CONFIG", "")
 RCLONE_PATH = os.getenv("RCLONE_PATH", "rclone")
 
+# YouTube video summaries (/summarize). Transcription normally runs on the home
+# transcribe service (youtube-transcript server.py) reached over Tailscale;
+# when it is offline, busy or times out the bot downloads the audio itself
+# (yt-dlp + ffmpeg, reusing RECORDING_COOKIE_FILE) and transcribes it with Groq.
+# Both LLM endpoints go through the OpenAI-compatible SDK (only base_url differs).
+TRANSCRIBE_URL = os.getenv("TRANSCRIBE_URL", "").rstrip("/")
+TRANSCRIBE_TOKEN = os.getenv("TRANSCRIBE_TOKEN", "")
+# Connect timeout (seconds); an unreachable transcribe service falls back quickly.
+TRANSCRIBE_CONNECT_TIMEOUT = float(os.getenv("TRANSCRIBE_CONNECT_TIMEOUT", "5"))
+# How often (seconds) to poll GET /jobs/{id} while the service queues/transcribes.
+TRANSCRIBE_POLL_INTERVAL = float(os.getenv("TRANSCRIBE_POLL_INTERVAL", "5"))
+# Give up on the transcribe service after this many seconds and fall back to
+# Groq. Keep well under Discord's 15-minute followup window so the fallback
+# still has time to run.
+TRANSCRIBE_JOB_TIMEOUT = int(os.getenv("TRANSCRIBE_JOB_TIMEOUT", "540"))
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-5-nano")
+# reasoning_effort for reasoning models (minimal/low/medium/high). Summaries
+# don't need much thinking; leave blank to omit the parameter entirely (needed
+# for non-reasoning models or providers that reject it).
+SUMMARY_REASONING_EFFORT = os.getenv("SUMMARY_REASONING_EFFORT", "low").strip()
+# Transcripts longer than this are truncated before summarizing (cost guard).
+SUMMARY_MAX_TRANSCRIPT_CHARS = int(
+    os.getenv("SUMMARY_MAX_TRANSCRIPT_CHARS", "200000")
+)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_TRANSCRIBE_MODEL = os.getenv("GROQ_TRANSCRIBE_MODEL", "whisper-large-v3-turbo")
+# Fallback audio is split into chunks of this many seconds (opus 32 kbps,
+# ~7 MB per 30 min) to stay under Groq's upload size limit.
+GROQ_CHUNK_SECONDS = int(os.getenv("GROQ_CHUNK_SECONDS", "1800"))
+
 ZERO_WIDTH_SPACE = "\u200b"

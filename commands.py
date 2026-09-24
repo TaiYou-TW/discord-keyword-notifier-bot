@@ -1,3 +1,4 @@
+import io
 import os
 import sqlite3
 import discord
@@ -10,7 +11,9 @@ from config import (
     ADMIN_USER_IDS,
     RCLONE_REMOTE,
     RECORDING_OUTPUT_DIR,
+    SUMMARY_MODEL,
 )
+from summarize import SummarizeError, parse_video_id
 
 # Discord hard limits we page under: 2000 chars per message content, and for
 # embeds 25 fields / ~6000 chars each. These helpers split long output across
@@ -1677,4 +1680,104 @@ async def record_list(interaction: discord.Interaction):
         interaction.user,
         interaction.user.id,
         len(recordings),
+    )
+
+
+_SUMMARY_SOURCE_LABELS = {
+    "subs": "YouTube 字幕",
+    "whisper": "Whisper（地端）",
+    "groq": "Groq Whisper（雲端備援）",
+}
+
+
+@bot.tree.command(name="summarize", description="用日文摘要 YouTube 影片")
+@app_commands.describe(
+    url="YouTube 影片網址或影片 ID",
+    transcript="是否附上完整逐字稿（預設 False）",
+)
+async def summarize(interaction: discord.Interaction, url: str, transcript: bool = False):
+    reason = bot.summarize_available()
+    if reason:
+        await interaction.response.send_message("❌ " + reason, ephemeral=True)
+        return
+    video_id = parse_video_id(url)
+    if not video_id:
+        await interaction.response.send_message(
+            "❌ 無法辨識影片網址，請提供 YouTube 影片網址或 11 碼影片 ID。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer()
+
+    async def progress(text: str) -> None:
+        await interaction.edit_original_response(content=text)
+
+    try:
+        row = await bot.summarize_video(video_id, progress)
+    except SummarizeError as exc:
+        await interaction.edit_original_response(content=f"❌ {exc}")
+        return
+    except Exception:
+        logger.exception("Summarize failed for %s", video_id)
+        await interaction.edit_original_response(content="❌ 摘要時發生未預期的錯誤，請稍後再試。")
+        return
+
+    video_url = f"https://youtu.be/{video_id}"
+    title = row.get("title") or video_id
+    summary = row["summary"]
+    footer = (
+        f"逐字稿：{_SUMMARY_SOURCE_LABELS.get(row['source'], row['source'])}"
+        f" · 摘要：{row.get('summary_model') or SUMMARY_MODEL}"
+        + (" · 快取" if row.get("cached") else "")
+    )
+
+    files = []
+    if len(summary) <= 4096:
+        content = None
+        embed = discord.Embed(
+            title=title[:256], url=video_url, description=summary, color=0xFF0000
+        )
+        embed.set_footer(text=footer)
+    else:
+        # Over the embed limit: send the summary as a Markdown attachment.
+        content = f"📝 **{title[:200]}**\n{video_url}\n-# {footer}"
+        embed = None
+        files.append(
+            discord.File(
+                io.BytesIO(f"# {title}\n\n{video_url}\n\n{summary}\n".encode()),
+                filename=f"{video_id}-summary.md",
+            )
+        )
+    if transcript:
+        files.append(
+            discord.File(
+                io.BytesIO(row["transcript"].encode()),
+                filename=f"{video_id}-transcript.txt",
+            )
+        )
+
+    try:
+        await interaction.edit_original_response(
+            content=content, embed=embed, attachments=files
+        )
+    except discord.HTTPException:
+        # Past Discord's 15-minute interaction window the token is dead; post
+        # to the channel instead so the (already cached) result isn't lost.
+        logger.warning("Summarize reply for %s failed; posting to channel", video_id)
+        if interaction.channel is not None:
+            for f in files:
+                f.reset()
+            await interaction.channel.send(
+                content=f"{interaction.user.mention} " + (content or ""),
+                embed=embed,
+                files=files,
+            )
+    logger.info(
+        "User %s(%d) summarized %s (source=%s cached=%s)",
+        interaction.user,
+        interaction.user.id,
+        video_id,
+        row["source"],
+        row.get("cached"),
     )
